@@ -1,0 +1,8 @@
+Codex Durable Loop
+
+This work is derived from repo-task-proof-loop:
+https://github.com/DenisSergeevitch/repo-task-proof-loop
+
+The upstream proof-loop files remain available under the Apache License 2.0.
+The durable Windows supervisor and recovery integration were added for this
+derived skill.
