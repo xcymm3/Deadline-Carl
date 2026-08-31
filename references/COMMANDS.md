@@ -4,6 +4,8 @@ Use these prompts as the parent-orchestrator language when running the workflow 
 
 Replace `<TASK_ID>` and any placeholder text.
 
+When Deadline-Carl runs these phases through the supervisor, the prompt also includes the delivery mode, deadline stage, total and remaining active time, remaining percentage, iteration timeout, and remaining iteration starts. Use this information for prioritization only. Never relax mandatory acceptance criteria or edit supervisor-owned runtime files.
+
 Codex orchestration mapping:
 
 - `spawn_agent`: spawn one child with `agent_type` set to the role name from `.codex/agents/`
@@ -63,6 +65,8 @@ Write or update:
 Requirements:
 - Preserve the original task statement
 - Produce explicit acceptance criteria labeled AC1, AC2, ...
+- In deadline-aware mode, add a delivery order: usable end-to-end core, remaining mandatory criteria, then optional polish
+- Do not reclassify a user requirement as optional merely because the budget is short
 - Include constraints
 - Include non-goals
 - Add a concise verification plan
@@ -90,6 +94,8 @@ Read:
 Your job:
 - Implement the task against the frozen spec
 - Make the smallest safe change set that satisfies the acceptance criteria
+- Follow the injected deadline stage: use healthy time for justified quality, but stop expansion and protect a usable core as the deadline approaches
+- In last-call, stabilize, run critical checks, checkpoint, and update deadline-report.md with completed core and honest mandatory gaps
 - Run focused checks as needed
 - Keep unrelated files untouched
 - Do not write verdict.json or problems.md

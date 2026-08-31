@@ -14,6 +14,7 @@ The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `ru
 
 - repository and task identity
 - active-time budget
+- delivery mode and cumulative explicit budget extensions
 - per-iteration timeout
 - maximum iterations and consecutive failures
 - heartbeat and retry intervals
@@ -45,6 +46,19 @@ The runtime never resets or cleans the repository during recovery.
 
 Only time while the supervisor is running counts toward the active-time budget. Heartbeat updates cap each elapsed increment so a suspended process cannot consume a large amount of budget on wake. A stopped supervisor, powered-off machine, or manual recovery gap does not consume active time.
 
+`start` never replenishes active time. The `extend` command adds a positive number of minutes only while the supervisor is stopped. It preserves accumulated time, phase, proof artifacts, logs, and Git state.
+
+## Deadline-aware planning
+
+The default `deadline-aware` mode injects current budget pressure into every fresh Worker prompt:
+
+- `craft`: at least 50% remains; complete the requested scope with justified in-scope quality.
+- `focus`: 20-50% remains; stop speculative expansion and close mandatory plus high-risk integration gaps.
+- `ship`: 5-20% remains; stop optional polish and finish a coherent end-to-end core plus critical checks.
+- `last-call`: below 5% remains; stabilize, checkpoint, run the shortest critical smoke checks, and write `deadline-report.md`.
+
+Workers see the total and remaining active minutes, remaining percentage, per-iteration timeout, and remaining iteration starts. They use this context for planning but do not own or edit runtime state. Deadline stages change work ordering, not acceptance semantics. A required criterion remains required, and the fresh verifier remains the semantic completion authority. `proof-first` retains budget enforcement without deadline-driven priority guidance.
+
 ## Phase transitions
 
 ```text
@@ -64,6 +78,7 @@ Each worker must return a schema-constrained result with its phase, status, and 
 - Repeated failures: stop after `maxConsecutiveFailures` and require inspection.
 - Codex CLI temporarily missing: keep heartbeat and retry resolution without consuming an iteration.
 - Safe stop: let the current child finish, checkpoint it, and do not start another child.
+- Budget or iteration exhaustion: record a machine-readable `stopReason`; incomplete work remains partial even when a usable core was delivered.
 
 ## Trust boundary
 

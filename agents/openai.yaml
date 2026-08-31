@@ -1,6 +1,6 @@
 interface:
-  display_name: "Codex Durable Loop"
-  short_description: "Run proof-driven Codex tasks with checkpoints, timeouts, heartbeat, and manual recovery."
-  default_prompt: "Use $codex-durable-loop for this non-trivial repository task. Initialize a repo-local task contract, start the external PowerShell supervisor only after explicit authorization, and report the task ID plus status command. Do not register scheduled tasks."
+  display_name: "Deadline-Carl"
+  short_description: "Run deadline-aware proof loops with recoverable checkpoints."
+  default_prompt: "Use $deadline-carl for this non-trivial repository task, keep proof standards fixed, adapt priorities to the remaining active-time budget, and start the recoverable supervisor only after explicit authorization."
 policy:
   allow_implicit_invocation: false

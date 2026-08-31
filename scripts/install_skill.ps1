@@ -6,7 +6,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $SkillRoot = Split-Path -Parent $PSScriptRoot
-$SkillName = 'codex-durable-loop'
+$SkillName = 'deadline-carl'
+$LegacySkillName = 'codex-durable-loop'
 
 if (-not $CodexHome) {
   $CodexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $HOME '.codex' }
@@ -15,9 +16,19 @@ if (-not $CodexHome) {
 $CodexHome = [System.IO.Path]::GetFullPath($CodexHome)
 $skillsDirectory = Join-Path $CodexHome 'skills'
 $destination = Join-Path $skillsDirectory $SkillName
+$legacyDestination = Join-Path $skillsDirectory $LegacySkillName
 $staging = Join-Path $skillsDirectory ".$SkillName.installing.$PID.$([Guid]::NewGuid().ToString('N'))"
 
 New-Item -ItemType Directory -Path $skillsDirectory -Force | Out-Null
+
+if (Test-Path -LiteralPath $legacyDestination) {
+  if (-not $Force) {
+    throw "Legacy skill is installed at $legacyDestination. Use -Force to migrate it while preserving a backup."
+  }
+  $legacyBackup = "$legacyDestination.backup.$(Get-Date -Format 'yyyyMMddHHmmss')"
+  Move-Item -LiteralPath $legacyDestination -Destination $legacyBackup
+  Write-Output "Legacy installation moved to $legacyBackup"
+}
 
 if (Test-Path -LiteralPath $destination) {
   if (-not $Force) {

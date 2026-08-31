@@ -6,7 +6,7 @@ $SkillRoot = Split-Path -Parent $PSScriptRoot
 $LoopScript = Join-Path $PSScriptRoot 'durable_loop.ps1'
 $InstallScript = Join-Path $PSScriptRoot 'install_skill.ps1'
 $tempBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
-$testRoot = Join-Path $tempBase "codex-durable-loop-test-$([Guid]::NewGuid().ToString('N'))"
+$testRoot = Join-Path $tempBase "deadline-carl-test-$([Guid]::NewGuid().ToString('N'))"
 $repo = Join-Path $testRoot 'repo'
 $taskId = 'recovery-test'
 $statePath = Join-Path $repo ".agent\durable-loop\$taskId\runtime.json"
@@ -150,13 +150,47 @@ Create a proof file.
     -RetryDelaySeconds 1 `
     -CliUnavailableTimeoutMinutes 1 `
     -MaxConsecutiveFailures 3 `
+    -DeliveryMode deadline-aware `
     -CodexExecutable $fakeCodex
   $initStatus = $initOutput | ConvertFrom-Json
   if ($initStatus.phase -ne 'freeze') { throw 'Init did not create the freeze phase.' }
+  if ($initStatus.deliveryMode -ne 'deadline-aware') { throw 'Init did not enable deadline-aware delivery.' }
+
+  $extendedStatus = (& $LoopScript extend `
+    -RepoRoot $repo `
+    -TaskId $taskId `
+    -AdditionalBudgetMinutes 2) | ConvertFrom-Json
+  if ([int]$extendedStatus.activeBudgetSeconds -ne 420) { throw 'Budget extension did not update the active-time limit.' }
+  if ([int]$extendedStatus.budgetExtensionSeconds -ne 120) { throw 'Budget extension was not recorded.' }
+  if ([int]$extendedStatus.remainingActiveSeconds -ne 420) { throw 'Budget extension did not refresh remaining active time.' }
+
+  $pressureState = Read-TestState
+  $pressureState.accumulatedActiveSeconds = 400
+  $pressureState.remainingActiveSeconds = 20
+  $pressureState | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $statePath -Encoding utf8
+  $lastCallStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
+  if ($lastCallStatus.deadlineStage -ne 'last-call') { throw 'Low remaining budget did not select last-call.' }
+  if ([double]$lastCallStatus.remainingActivePercent -ge 5) { throw 'Last-call status reported an invalid remaining percentage.' }
+
+  $recoveredBudgetStatus = (& $LoopScript extend `
+    -RepoRoot $repo `
+    -TaskId $taskId `
+    -AdditionalBudgetMinutes 10) | ConvertFrom-Json
+  if ([int]$recoveredBudgetStatus.activeBudgetSeconds -ne 1020) { throw 'Second budget extension did not preserve accumulated time.' }
+  if ([int]$recoveredBudgetStatus.budgetExtensionSeconds -ne 720) { throw 'Cumulative budget extensions were not recorded.' }
+  if ($recoveredBudgetStatus.deadlineStage -ne 'craft') { throw 'Added recovery budget did not return the loop to craft stage.' }
 
   New-Item -ItemType File -Path $delayMarker -Force | Out-Null
   $startStatus = (& $LoopScript start -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
   $startedSupervisors.Add([int]$startStatus.supervisorPid)
+
+  $extendWhileRunningRejected = $false
+  try {
+    & $LoopScript extend -RepoRoot $repo -TaskId $taskId -AdditionalBudgetMinutes 1 *> $null
+  } catch {
+    $extendWhileRunningRejected = $true
+  }
+  if (-not $extendWhileRunningRejected) { throw 'Budget extension must be rejected while the supervisor is running.' }
 
   Wait-Until {
     $state = Read-TestState
@@ -191,13 +225,35 @@ Create a proof file.
   if ($verdict.overall_verdict -ne 'PASS') { throw 'The fake verifier did not produce PASS.' }
   if ([int]$finalState.iterationsStarted -ne 4) { throw "Expected 4 iterations, got $($finalState.iterationsStarted)." }
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'product.txt'))) { throw 'Build artifact is missing.' }
+  if ($finalState.stopReason -ne 'completed') { throw 'Completed loop did not record a completed stop reason.' }
+  $completedStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
+  if ($completedStatus.deadlineStage -ne 'complete') { throw 'Completed status did not report the complete deadline stage.' }
+
+  $firstPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-001-freeze.prompt.md") -Raw -Encoding utf8
+  foreach ($requiredPromptText in @(
+    '# Deadline-Carl Iteration',
+    'Delivery mode: `deadline-aware`',
+    'Deadline stage: `craft`',
+    'Remaining active time:',
+    'deadline-report.md',
+    'Never silently downgrade required scope'
+  )) {
+    if (-not $firstPrompt.Contains($requiredPromptText)) {
+      throw "Deadline-aware prompt is missing: $requiredPromptText"
+    }
+  }
 
   $testCodexHome = Join-Path $testRoot 'codex-home'
-  & $InstallScript -CodexHome $testCodexHome *> $null
-  $installedSkill = Join-Path $testCodexHome 'skills\codex-durable-loop'
+  $legacyInstall = Join-Path $testCodexHome 'skills\codex-durable-loop'
+  New-Item -ItemType Directory -Path $legacyInstall -Force | Out-Null
+  'legacy' | Set-Content -LiteralPath (Join-Path $legacyInstall 'marker.txt') -Encoding utf8
+  & $InstallScript -CodexHome $testCodexHome -Force *> $null
+  $installedSkill = Join-Path $testCodexHome 'skills\deadline-carl'
   if (-not (Test-Path -LiteralPath (Join-Path $installedSkill 'SKILL.md'))) {
     throw 'Installer did not create a usable skill directory.'
   }
+  $legacyBackups = @(Get-ChildItem -LiteralPath (Join-Path $testCodexHome 'skills') -Directory -Filter 'codex-durable-loop.backup.*')
+  if ($legacyBackups.Count -ne 1) { throw 'Installer did not preserve exactly one legacy installation backup.' }
 
   [pscustomobject]@{
     result = 'PASS'

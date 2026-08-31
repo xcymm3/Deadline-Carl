@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('init', 'start', 'supervise', 'status', 'stop', 'checkpoint', 'doctor')]
+  [ValidateSet('init', 'start', 'supervise', 'status', 'stop', 'checkpoint', 'extend', 'doctor')]
   [string]$Command = 'status',
   [string]$RepoRoot = (Get-Location).Path,
   [string]$TaskId = '',
@@ -13,6 +13,9 @@ param(
   [int]$RetryDelaySeconds = 20,
   [int]$CliUnavailableTimeoutMinutes = 30,
   [int]$MaxConsecutiveFailures = 6,
+  [ValidateSet('deadline-aware', 'proof-first')]
+  [string]$DeliveryMode = 'deadline-aware',
+  [int]$AdditionalBudgetMinutes = 0,
   [string]$Model = '',
   [string]$CodexExecutable = '',
   [switch]$Force
@@ -130,6 +133,22 @@ function Stop-ProcessTree([int]$ProcessId) {
   Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
 }
 
+function Ensure-ConfigFields([object]$Config) {
+  $defaults = [ordered]@{
+    deliveryMode = 'deadline-aware'
+    budgetExtensionSeconds = 0
+  }
+  foreach ($entry in $defaults.GetEnumerator()) {
+    if ($null -eq $Config.PSObject.Properties[$entry.Key]) {
+      $Config | Add-Member -NotePropertyName $entry.Key -NotePropertyValue $entry.Value
+    }
+  }
+  if ([string]$Config.deliveryMode -notin @('deadline-aware', 'proof-first')) {
+    throw "Unsupported deliveryMode in durable configuration: $($Config.deliveryMode)"
+  }
+  return $Config
+}
+
 function Ensure-StateFields([object]$State, [object]$Config) {
   $defaults = [ordered]@{
     running = $false
@@ -156,6 +175,7 @@ function Ensure-StateFields([object]$State, [object]$Config) {
     lastTickUtc = $null
     lastCheckpointUtc = $null
     stopRequested = $false
+    stopReason = $null
     lastIterationExitCode = $null
     lastIterationSummary = $null
     consecutiveFailures = 0
@@ -171,6 +191,48 @@ function Ensure-StateFields([object]$State, [object]$Config) {
     [int]$Config.activeBudgetSeconds - [int]$State.accumulatedActiveSeconds
   )
   return $State
+}
+
+function Get-DeadlineContext([object]$Config, [object]$State) {
+  $totalSeconds = [Math]::Max(1, [int]$Config.activeBudgetSeconds)
+  $remainingSeconds = [Math]::Max(0, [int]$State.remainingActiveSeconds)
+  $remainingPercent = [Math]::Round(($remainingSeconds * 100.0) / $totalSeconds, 1)
+  $remainingIterations = [Math]::Max(0, [int]$Config.maxIterations - [int]$State.iterationsStarted)
+  $stage = 'proof-first'
+  $guidance = 'Follow the frozen contract in proof-first order. The budget is a safety limit, not a reason to weaken verification.'
+
+  if ($State.completed) {
+    $stage = 'complete'
+    $guidance = 'The proof package is complete. Do not start additional work unless the user creates a new scoped task.'
+  } elseif ($State.blocked) {
+    $stage = 'blocked'
+    $guidance = 'The loop is blocked. Preserve state and resolve the recorded blocker before forcing a restart.'
+  } elseif ([string]$Config.deliveryMode -eq 'deadline-aware') {
+    if ($remainingPercent -ge 50) {
+      $stage = 'craft'
+      $guidance = 'Time is healthy. Build the complete required scope, choose maintainable solutions, and spend justified effort on quality without inventing optional scope.'
+    } elseif ($remainingPercent -ge 20) {
+      $stage = 'focus'
+      $guidance = 'Time is tightening. Stop speculative expansion, finish mandatory acceptance criteria, integrate the work, and prioritize the highest-risk verification gaps.'
+    } elseif ($remainingPercent -ge 5) {
+      $stage = 'ship'
+      $guidance = 'Deadline is close. Do not start optional polish or broad refactors. Finish the smallest usable end-to-end core, run critical checks, and checkpoint all partial progress.'
+    } else {
+      $stage = 'last-call'
+      $guidance = 'Deadline is imminent. Preserve a usable core, stabilize current work, run the shortest critical smoke checks, and update deadline-report.md with completed work, required gaps, checks run, and why more time is needed. Never claim PASS for incomplete criteria.'
+    }
+  }
+
+  return [pscustomobject]@{
+    deliveryMode = [string]$Config.deliveryMode
+    stage = $stage
+    totalMinutes = [Math]::Round($totalSeconds / 60.0, 1)
+    remainingMinutes = [Math]::Round($remainingSeconds / 60.0, 1)
+    remainingPercent = $remainingPercent
+    iterationTimeoutMinutes = [Math]::Round(([int]$Config.iterationTimeoutSeconds) / 60.0, 1)
+    remainingIterations = $remainingIterations
+    guidance = $guidance
+  }
 }
 
 function Read-State([object]$Paths, [object]$Config) {
@@ -335,9 +397,20 @@ function Get-NextPhase([string]$Phase, [object]$Paths) {
   }
 }
 
-function New-IterationPrompt([string]$Root, [string]$Id, [string]$Phase) {
+function New-IterationPrompt([object]$Config, [object]$State) {
   $template = Get-Content -LiteralPath $PromptTemplate -Raw -Encoding utf8
-  return $template.Replace('{{REPO_ROOT}}', $Root).Replace('{{TASK_ID}}', $Id).Replace('{{PHASE}}', $Phase)
+  $context = Get-DeadlineContext $Config $State
+  return $template.Replace('{{REPO_ROOT}}', [string]$Config.repoRoot).
+    Replace('{{TASK_ID}}', [string]$Config.taskId).
+    Replace('{{PHASE}}', [string]$State.phase).
+    Replace('{{DELIVERY_MODE}}', [string]$context.deliveryMode).
+    Replace('{{DEADLINE_STAGE}}', [string]$context.stage).
+    Replace('{{ACTIVE_BUDGET_MINUTES}}', [string]$context.totalMinutes).
+    Replace('{{REMAINING_ACTIVE_MINUTES}}', [string]$context.remainingMinutes).
+    Replace('{{REMAINING_PERCENT}}', [string]$context.remainingPercent).
+    Replace('{{ITERATION_TIMEOUT_MINUTES}}', [string]$context.iterationTimeoutMinutes).
+    Replace('{{REMAINING_ITERATIONS}}', [string]$context.remainingIterations).
+    Replace('{{DEADLINE_GUIDANCE}}', [string]$context.guidance)
 }
 
 function Read-IterationResult([string]$Path) {
@@ -368,7 +441,7 @@ function Start-CodexIteration(
   Ensure-Directory $Paths.Logs
   [System.IO.File]::WriteAllText(
     $promptPath,
-    (New-IterationPrompt $Config.repoRoot $Config.taskId $State.phase),
+    (New-IterationPrompt $Config $State),
     [System.Text.UTF8Encoding]::new($false)
   )
 
@@ -514,7 +587,7 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   return $state
 }
 
-function Complete-Supervisor([object]$State, [object]$Paths, [bool]$Completed) {
+function Complete-Supervisor([object]$State, [object]$Paths, [object]$Config, [bool]$Completed) {
   $State.running = $false
   $State.supervisorPid = $null
   $State.supervisorStartedAtUtc = $null
@@ -522,7 +595,18 @@ function Complete-Supervisor([object]$State, [object]$Paths, [bool]$Completed) {
   $State.lastCheckpointUtc = Get-UtcNowIso
   if ($Completed) {
     $State.completed = $true
+    $State.stopReason = 'completed'
     if (-not $State.completedAtUtc) { $State.completedAtUtc = Get-UtcNowIso }
+  } elseif ($State.blocked) {
+    $State.stopReason = 'blocked'
+  } elseif ($State.stopRequested) {
+    $State.stopReason = 'user-requested'
+  } elseif ($State.remainingActiveSeconds -le 0) {
+    $State.stopReason = 'active-budget-exhausted'
+  } elseif ([int]$State.iterationsStarted -ge [int]$Config.maxIterations) {
+    $State.stopReason = 'max-iterations-exhausted'
+  } else {
+    $State.stopReason = 'stopped'
   }
   Write-JsonAtomic $Paths.Runtime $State
   Add-SupervisorLog $Paths "Supervisor stopped. completed=$Completed blocked=$($State.blocked) remaining=$($State.remainingActiveSeconds)"
@@ -543,6 +627,7 @@ function Record-SupervisorFailure([object]$Config, [object]$Paths, [string]$Mess
 }
 
 function Write-Status([object]$Config, [object]$Paths, [object]$State) {
+  $deadline = Get-DeadlineContext $Config $State
   [pscustomobject]@{
     repoRoot = $Config.repoRoot
     taskId = $Config.taskId
@@ -550,7 +635,13 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     completed = $State.completed
     blocked = $State.blocked
     blockedReason = $State.blockedReason
+    stopReason = $State.stopReason
     phase = $State.phase
+    deliveryMode = $deadline.deliveryMode
+    deadlineStage = $deadline.stage
+    activeBudgetSeconds = $Config.activeBudgetSeconds
+    budgetExtensionSeconds = $Config.budgetExtensionSeconds
+    remainingActivePercent = $deadline.remainingPercent
     supervisorPid = $State.supervisorPid
     activeChildPid = $State.activeChildPid
     iterationsStarted = $State.iterationsStarted
@@ -614,11 +705,12 @@ if ($Command -eq 'init') {
 
   if (-not (Test-Path -LiteralPath $paths.Config)) {
     $config = [ordered]@{
-      schemaVersion = 1
+      schemaVersion = 2
       taskId = $TaskId
       repoRoot = $resolvedRepo
       createdAtUtc = Get-UtcNowIso
       activeBudgetSeconds = $ActiveBudgetMinutes * 60
+      budgetExtensionSeconds = 0
       iterationTimeoutSeconds = $IterationTimeoutMinutes * 60
       maxIterations = $MaxIterations
       heartbeatSeconds = $DefaultHeartbeatSeconds
@@ -626,13 +718,14 @@ if ($Command -eq 'init') {
       retryDelaySeconds = [Math]::Max(1, $RetryDelaySeconds)
       cliUnavailableTimeoutSeconds = [Math]::Max(60, $CliUnavailableTimeoutMinutes * 60)
       maxConsecutiveFailures = [Math]::Max(1, $MaxConsecutiveFailures)
+      deliveryMode = $DeliveryMode
       model = if ($Model) { $Model } else { $null }
       codexExecutable = if ($CodexExecutable) { (Resolve-Path -LiteralPath $CodexExecutable).Path } else { $null }
       approvalMode = 'approve-for-me'
     }
     Write-JsonAtomic $paths.Config $config
   }
-  $config = Read-Json $paths.Config
+  $config = Ensure-ConfigFields (Read-Json $paths.Config)
 
   if (-not (Test-Path -LiteralPath $paths.Runtime)) {
     $state = [pscustomobject]@{}
@@ -648,7 +741,7 @@ if ($Command -eq 'init') {
 if (-not (Test-Path -LiteralPath $paths.Config)) {
   throw "Missing durable-loop configuration: $($paths.Config). Run init first."
 }
-$config = Read-Json $paths.Config
+$config = Ensure-ConfigFields (Read-Json $paths.Config)
 $state = Read-State $paths $config
 if ($Command -ne 'supervise') {
   $state = Recover-StaleSupervisor $state $paths
@@ -661,6 +754,27 @@ switch ($Command) {
   'checkpoint' {
     $state.lastCheckpointUtc = Get-UtcNowIso
     Write-JsonAtomic $paths.Runtime $state
+    Write-Status $config $paths $state
+  }
+  'extend' {
+    if ($state.running) {
+      throw 'Stop the loop before extending its active-time budget.'
+    }
+    if ($state.completed) {
+      throw 'The loop is already complete; a completed task does not need more active-time budget.'
+    }
+    if ($AdditionalBudgetMinutes -le 0) {
+      throw 'AdditionalBudgetMinutes must be positive.'
+    }
+    $additionalSeconds = $AdditionalBudgetMinutes * 60
+    $config.activeBudgetSeconds = [int]$config.activeBudgetSeconds + $additionalSeconds
+    $config.budgetExtensionSeconds = [int]$config.budgetExtensionSeconds + $additionalSeconds
+    Write-JsonAtomic $paths.Config $config
+    $state = Ensure-StateFields $state $config
+    $state.stopReason = $null
+    $state.lastCheckpointUtc = Get-UtcNowIso
+    Write-JsonAtomic $paths.Runtime $state
+    Add-SupervisorLog $paths "Active-time budget extended by $AdditionalBudgetMinutes minutes. totalSeconds=$($config.activeBudgetSeconds)"
     Write-Status $config $paths $state
   }
   'stop' {
@@ -680,13 +794,18 @@ switch ($Command) {
       exit 0
     }
     if ($state.completed) {
+      if ($state.stopReason -ne 'completed') {
+        $state.stopReason = 'completed'
+        $state.lastCheckpointUtc = Get-UtcNowIso
+        Write-JsonAtomic $paths.Runtime $state
+      }
       Write-Status $config $paths $state
       exit 0
     }
     if ($state.blocked -and -not $Force) {
       throw "Loop is blocked: $($state.blockedReason). Resolve the blocker, then run start -Force."
     }
-    if ($state.remainingActiveSeconds -le 0) { throw 'Active-time budget is exhausted.' }
+    if ($state.remainingActiveSeconds -le 0) { throw 'Active-time budget is exhausted. Stop the loop and use extend -AdditionalBudgetMinutes <minutes> to add an explicit recovery budget.' }
     if ([int]$state.iterationsStarted -ge [int]$config.maxIterations) { throw 'Maximum iteration count is exhausted.' }
 
     if ($Force) {
@@ -718,6 +837,7 @@ switch ($Command) {
     $state.supervisorPid = $process.Id
     $state.supervisorStartedAtUtc = Get-ProcessStartUtc $process.Id
     $state.stopRequested = $false
+    $state.stopReason = $null
     $state.lastTickUtc = Get-UtcNowIso
     $state.lastHeartbeatUtc = Get-UtcNowIso
     $state.lastCheckpointUtc = Get-UtcNowIso
@@ -740,11 +860,11 @@ switch ($Command) {
       Write-JsonAtomic $paths.Runtime $state
 
       if ($state.completed) {
-        Complete-Supervisor $state $paths $true
+        Complete-Supervisor $state $paths $config $true
         break
       }
       if ($state.blocked -or $state.stopRequested -or $state.remainingActiveSeconds -le 0 -or [int]$state.iterationsStarted -ge [int]$config.maxIterations) {
-        Complete-Supervisor $state $paths $false
+        Complete-Supervisor $state $paths $config $false
         break
       }
 

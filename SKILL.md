@@ -1,19 +1,32 @@
 ---
-name: codex-durable-loop
-description: Run non-trivial repository work through a recoverable Codex CLI supervisor with disk checkpoints, active-time budgets, iteration timeouts, heartbeat, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
+name: deadline-carl
+description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "2.0.0"
+  version: "3.0.0"
 ---
 
-# Codex Durable Loop
+# Deadline-Carl
 
-Use this skill to run a bounded repository task through two cooperating layers:
+Deadline-Carl is the worker who watches the clock without lying about the work. Use this skill to run a bounded repository task through two cooperating layers:
 
 1. The proof protocol freezes a spec, builds, records criterion-level evidence, runs a fresh independent verifier, and applies minimal fixes until every acceptance criterion passes.
-2. The external PowerShell supervisor starts fresh `codex exec` workers, writes heartbeat and checkpoint state, enforces time and iteration budgets, terminates timed-out workers, and resumes after a manual `start` when the supervisor was interrupted.
+2. The external PowerShell supervisor starts fresh `codex exec` workers, gives each worker current deadline pressure, writes heartbeat and checkpoint state, enforces time and iteration budgets, terminates timed-out workers, and resumes after a manual `start` when the supervisor was interrupted.
 
 The supervisor is deterministic infrastructure. Codex workers make semantic decisions. Do not ask a worker to manage its own PID, heartbeat, runtime budget, or recovery state.
+
+## Delivery modes
+
+`deadline-aware` is the default. Every iteration receives total and remaining active time, remaining percentage, iteration timeout, remaining iteration starts, and one deterministic planning stage:
+
+- `craft` at 50% or more remaining: complete the requested scope with justified quality work.
+- `focus` at 20-50% remaining: stop speculative expansion and close mandatory criteria plus high-risk integration gaps.
+- `ship` at 5-20% remaining: stop optional polish, finish the smallest usable end-to-end core, test it, and checkpoint partial work.
+- `last-call` below 5% remaining: stabilize, run critical smoke checks, and write `deadline-report.md` with delivered core, mandatory gaps, actual checks, and a defensible extension estimate.
+
+Time pressure changes execution order, never PASS semantics. User-mandated criteria remain mandatory, and incomplete work must be reported as partial rather than disguised as PASS.
+
+Use `proof-first` only when the user wants the previous budget-agnostic behavior. It retains the same hard limits but does not ask workers to change priorities as the deadline approaches.
 
 ## Safety boundary
 
@@ -24,6 +37,7 @@ The supervisor is deterministic infrastructure. Codex workers make semantic deci
 - Never reset, clean, checkout, or discard existing worktree changes.
 - A safe stop lets the active iteration finish but prevents another iteration from starting.
 - `start -Force` only clears a recorded loop blocker. It does not overwrite proof artifacts or reset Git state.
+- Budget extension is explicit, additive, and allowed only while the supervisor is stopped.
 
 ## Commands
 
@@ -58,6 +72,7 @@ Useful bounded-run options:
 -CliUnavailableTimeoutMinutes 30
 -MaxConsecutiveFailures 6
 -Model gpt-5.6-sol
+-DeliveryMode deadline-aware
 ```
 
 Initialization is idempotent and preserves existing task files. It invokes `scripts/task_loop.py init` with Codex project agents and the repo-root `AGENTS.md` managed block.
@@ -77,6 +92,21 @@ If a genuine blocker was recorded and has been resolved:
 ```powershell
 & scripts/durable_loop.ps1 start -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening -Force
 ```
+
+### Extend a stopped loop
+
+`start` never replenishes time. To add a reviewed recovery budget, stop the loop and extend it explicitly:
+
+```powershell
+& scripts/durable_loop.ps1 extend `
+  -RepoRoot D:\path\to\repo `
+  -TaskId feature-auth-hardening `
+  -AdditionalBudgetMinutes 720
+```
+
+The extension preserves accumulated active time, proof artifacts, phase, logs, and Git state. It records the added seconds in configuration and status output.
+
+Extending time does not add iteration starts. If `maxIterations` is also exhausted, inspect the failure pattern before choosing a new bounded task configuration.
 
 ### Status and checkpoint
 
@@ -119,6 +149,8 @@ Supervisor-owned state is separate:
 ```
 
 Workers must not edit `.agent/durable-loop/`. `runtime.json` is atomically replaced and contains the phase, active-time usage, heartbeat, supervisor/child identity, current log paths, failures, and completion state.
+
+Status output also exposes `deliveryMode`, `deadlineStage`, total and extended budget, remaining percentage, and a terminal `stopReason` such as `completed`, `active-budget-exhausted`, or `max-iterations-exhausted`.
 
 ## Proof phases
 

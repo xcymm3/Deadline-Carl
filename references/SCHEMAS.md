@@ -15,7 +15,19 @@ These are the required files for each task folder:
     screenshot-1.png
   verdict.json
   problems.md
+  deadline-report.md  # optional; written during deadline-aware last-call
 ```
+
+## `deadline-report.md`
+
+This optional handoff is required when a Worker begins an iteration in the `last-call` deadline stage and the task is not already complete. It records:
+
+- the usable end-to-end core currently delivered
+- mandatory acceptance criteria still incomplete or unproven
+- checks actually run and their outcomes
+- a defensible estimate of the smallest additional active-time budget
+
+It never replaces `evidence.json` or `verdict.json`, and it cannot turn a partial task into PASS.
 
 ## `evidence.json`
 

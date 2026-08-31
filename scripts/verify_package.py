@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Smoke-test the codex-durable-loop skill package."""
+"""Smoke-test the Deadline-Carl skill package."""
 
 from __future__ import annotations
 
@@ -66,6 +66,9 @@ def main() -> int:
         "codex exec --approve-for-me",
         "start -Force",
         "fresh independent verifier",
+        "deadline-aware",
+        "deadline-report.md",
+        "AdditionalBudgetMinutes",
     )
     for phrase in required_skill_phrases:
         if phrase not in body:
@@ -80,7 +83,7 @@ def main() -> int:
         raise SystemExit("Iteration result schema has unexpected required fields.")
 
     task_loop = skill_root / "scripts/task_loop.py"
-    with tempfile.TemporaryDirectory(prefix="codex-durable-loop-") as temp_directory:
+    with tempfile.TemporaryDirectory(prefix="deadline-carl-") as temp_directory:
         repo = Path(temp_directory) / "demo-repo"
         repo.mkdir(parents=True)
         run(["git", "init"], repo)
