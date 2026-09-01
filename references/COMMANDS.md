@@ -65,6 +65,7 @@ Write or update:
 Requirements:
 - Preserve the original task statement
 - Produce explicit acceptance criteria labeled AC1, AC2, ...
+- Produce a stable `## Work items` table with immutable IDs, descriptions, and mapped AC IDs
 - In deadline-aware mode, add a delivery order: usable end-to-end core, remaining mandatory criteria, then optional polish
 - Do not reclassify a user requirement as optional merely because the budget is short
 - Include constraints
@@ -93,6 +94,7 @@ Read:
 
 Your job:
 - Implement the task against the frozen spec
+- Read `plan.json` and `progress.json`; update the state, note, and proof for each touched item
 - Make the smallest safe change set that satisfies the acceptance criteria
 - Follow the injected deadline stage: use healthy time for justified quality, but stop expansion and protect a usable core as the deadline approaches
 - In last-call, stabilize, run critical checks, checkpoint, and update deadline-report.md with completed core and honest mandatory gaps
@@ -100,6 +102,7 @@ Your job:
 - Keep unrelated files untouched
 - Do not write verdict.json or problems.md
 - Do not claim final completion yet
+- Return `progressed` while mandatory items remain and `completed` only when all frozen items are implemented
 
 Return to the parent with:
 - files changed
@@ -233,6 +236,7 @@ Write or update:
 
 Rules:
 - For each AC, assign PASS, FAIL, or UNKNOWN
+- Include the non-TODO `text` field for every AC and validate the evidence artifact before returning completed
 - Every PASS must cite concrete proof
 - FAIL and UNKNOWN must explain the gap
 - Overall PASS only if every AC is PASS
@@ -334,6 +338,7 @@ Read only:
 Your job:
 - Reconfirm each listed FAIL or UNKNOWN condition before editing
 - Make the smallest safe change set
+- Update the affected work-item states and return `progressed` while mandatory work remains
 - Avoid regressing already-passing criteria
 - Rerun only the relevant checks
 - Regenerate:
@@ -400,3 +405,5 @@ scripts/task_loop.py status --task-id <TASK_ID>
 
 If the repo is not yet initialized, run `init` first.
 Do not run `status` or `validate` in parallel with `init`; wait for `init` to finish first. If `status` reports `init_in_progress: true`, retry later.
+
+Read `progressDisplay.implementation`, `progressDisplay.verification`, and `progressDisplay.acceptance` as task progress. Treat `iterationBudgetDisplay` only as retry capacity.

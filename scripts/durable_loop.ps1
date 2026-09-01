@@ -332,32 +332,61 @@ function Invoke-ProofValidation([string]$Root, [string]$Id) {
   return $LASTEXITCODE -eq 0
 }
 
+function Invoke-ProofArtifactValidation([string]$Root, [string]$Id, [string]$Artifact) {
+  $python = Get-PythonExecutable
+  & $python $TaskHelper validate --task-id $Id --repo-root $Root --artifact $Artifact *> $null
+  return $LASTEXITCODE -eq 0
+}
+
+function Invoke-ProofPlanSync([string]$Root, [string]$Id, [bool]$ForcePlan, [bool]$MigrateEvidence) {
+  $python = Get-PythonExecutable
+  $arguments = @($TaskHelper, 'sync-plan', '--task-id', $Id, '--repo-root', $Root)
+  if ($ForcePlan) { $arguments += '--force' }
+  if ($MigrateEvidence) { $arguments += '--migrate-evidence' }
+  & $python @arguments *> $null
+  return $LASTEXITCODE -eq 0
+}
+
+function Get-ProofStatus([string]$Root, [string]$Id) {
+  try {
+    $python = Get-PythonExecutable
+    $output = & $python $TaskHelper status --task-id $Id --repo-root $Root 2>$null
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return ($output | Out-String) | ConvertFrom-Json
+  } catch {
+    return $null
+  }
+}
+
 function Test-FrozenSpec([object]$Paths) {
   $path = Join-Path $Paths.TaskDirectory 'spec.md'
   if (-not (Test-Path -LiteralPath $path)) { return $false }
   $content = Get-Content -LiteralPath $path -Raw -Encoding utf8
-  if ($content -match '(?m)^- AC\d+:\s*TODO\s*$') { return $false }
+  $criterionPattern = '(?mi)^(?:\s*[-*+]\s+AC\d+\s*:|\s{0,3}#{2,6}\s+AC\d+(?:\s*[:—-]|\s*$))'
+  $todoCriterionPattern = '(?mi)^(?:\s*[-*+]\s+AC\d+\s*:\s*|\s{0,3}#{2,6}\s+AC\d+(?:\s*[:—-]\s*|\s+))TODO\s*$'
+  if ($content -match $todoCriterionPattern) { return $false }
   if ($content -match '(?ms)## Constraints\s+- TODO\s*(?:\r?\n|$)') { return $false }
   if ($content -match '(?ms)## Non-goals\s+- TODO\s*(?:\r?\n|$)') { return $false }
-  return $content -match '(?m)^- AC\d+:'
+  return $content -match $criterionPattern
 }
 
 function Test-EvidenceReady([object]$Paths) {
-  $path = Join-Path $Paths.TaskDirectory 'evidence.json'
-  if (-not (Test-Path -LiteralPath $path)) { return $false }
-  try {
-    $evidence = Read-Json $path
-    $criteria = @($evidence.acceptance_criteria)
-    if ($criteria.Count -eq 0) { return $false }
-    foreach ($criterion in $criteria) {
-      if (-not $criterion.id -or -not $criterion.text -or $criterion.text -eq 'TODO') { return $false }
-      if ($criterion.status -notin @('PASS', 'FAIL', 'UNKNOWN')) { return $false }
-      if ($criterion.status -eq 'PASS' -and @($criterion.proof).Count -eq 0) { return $false }
-    }
-    return $true
-  } catch {
-    return $false
-  }
+  $config = Read-Json (Join-Path $Paths.RuntimeDirectory 'config.json')
+  return Invoke-ProofArtifactValidation $config.repoRoot $config.taskId 'evidence'
+}
+
+function Test-WorkPlanReady([object]$Paths) {
+  $config = Read-Json (Join-Path $Paths.RuntimeDirectory 'config.json')
+  return Invoke-ProofArtifactValidation $config.repoRoot $config.taskId 'plan'
+}
+
+function Test-BuildReady([object]$Paths) {
+  $config = Read-Json (Join-Path $Paths.RuntimeDirectory 'config.json')
+  if (-not (Invoke-ProofArtifactValidation $config.repoRoot $config.taskId 'progress')) { return $false }
+  $proofStatus = Get-ProofStatus $config.repoRoot $config.taskId
+  if (-not $proofStatus -or -not $proofStatus.progress) { return $false }
+  $total = [int]$proofStatus.progress.work_items_total
+  return $total -gt 0 -and [int]$proofStatus.progress.implemented -eq $total -and [int]$proofStatus.progress.blocked -eq 0
 }
 
 function Get-Verdict([object]$Paths) {
@@ -374,11 +403,14 @@ function Get-Verdict([object]$Paths) {
 
 function Test-PhaseArtifacts([string]$Phase, [object]$Paths) {
   switch ($Phase) {
-    'freeze' { return Test-FrozenSpec $Paths }
-    'build' { return Test-FrozenSpec $Paths }
+    'freeze' { return (Test-FrozenSpec $Paths) -and (Test-WorkPlanReady $Paths) }
+    'build' { return Test-BuildReady $Paths }
     'evidence' { return Test-EvidenceReady $Paths }
-    'verify' { return $null -ne (Get-Verdict $Paths) }
-    'fix' { return Test-EvidenceReady $Paths }
+    'verify' {
+      $config = Read-Json (Join-Path $Paths.RuntimeDirectory 'config.json')
+      return (Invoke-ProofArtifactValidation $config.repoRoot $config.taskId 'verdict') -and $null -ne (Get-Verdict $Paths)
+    }
+    'fix' { return (Test-BuildReady $Paths) -and (Test-EvidenceReady $Paths) }
     default { return $false }
   }
 }
@@ -400,6 +432,10 @@ function Get-NextPhase([string]$Phase, [object]$Paths) {
 function New-IterationPrompt([object]$Config, [object]$State) {
   $template = Get-Content -LiteralPath $PromptTemplate -Raw -Encoding utf8
   $context = Get-DeadlineContext $Config $State
+  $proofStatus = Get-ProofStatus $Config.repoRoot $Config.taskId
+  $implementationProgress = if ($proofStatus -and $proofStatus.progress_display) { [string]$proofStatus.progress_display.implementation } else { '[unavailable]' }
+  $verificationProgress = if ($proofStatus -and $proofStatus.progress_display) { [string]$proofStatus.progress_display.verification } else { '[unavailable]' }
+  $acceptanceProgress = if ($proofStatus -and $proofStatus.progress_display) { [string]$proofStatus.progress_display.acceptance } else { '[unavailable]' }
   return $template.Replace('{{REPO_ROOT}}', [string]$Config.repoRoot).
     Replace('{{TASK_ID}}', [string]$Config.taskId).
     Replace('{{PHASE}}', [string]$State.phase).
@@ -410,7 +446,11 @@ function New-IterationPrompt([object]$Config, [object]$State) {
     Replace('{{REMAINING_PERCENT}}', [string]$context.remainingPercent).
     Replace('{{ITERATION_TIMEOUT_MINUTES}}', [string]$context.iterationTimeoutMinutes).
     Replace('{{REMAINING_ITERATIONS}}', [string]$context.remainingIterations).
-    Replace('{{DEADLINE_GUIDANCE}}', [string]$context.guidance)
+    Replace('{{DEADLINE_GUIDANCE}}', [string]$context.guidance).
+    Replace('{{TASK_HELPER}}', [string]$TaskHelper).
+    Replace('{{IMPLEMENTATION_PROGRESS}}', $implementationProgress).
+    Replace('{{VERIFICATION_PROGRESS}}', $verificationProgress).
+    Replace('{{ACCEPTANCE_PROGRESS}}', $acceptanceProgress)
 }
 
 function Read-IterationResult([string]$Path) {
@@ -538,6 +578,9 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   $result = Read-IterationResult ([string]$state.currentSummaryPath)
   $validExit = $null -eq $ExitCode -or [int]$ExitCode -eq 0
   $validResult = $null -ne $result -and $result.phase -eq $phase
+  if ($validExit -and $validResult -and $result.status -eq 'completed' -and $phase -eq 'freeze' -and (Test-FrozenSpec $Paths)) {
+    Invoke-ProofPlanSync $Config.repoRoot $Config.taskId $true $true | Out-Null
+  }
   $artifactsReady = Test-PhaseArtifacts $phase $Paths
 
   $state.lastIterationExitCode = $ExitCode
@@ -554,6 +597,8 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   if ($validResult -and $result.status -eq 'blocked') {
     $state.blocked = $true
     $state.blockedReason = [string]$result.summary
+  } elseif ($validExit -and $validResult -and $result.status -eq 'progressed') {
+    $state.consecutiveFailures = 0
   } elseif ($validExit -and $validResult -and $result.status -eq 'completed' -and $artifactsReady) {
     $state.consecutiveFailures = 0
     $nextPhase = Get-NextPhase $phase $Paths
@@ -628,6 +673,8 @@ function Record-SupervisorFailure([object]$Config, [object]$Paths, [string]$Mess
 
 function Write-Status([object]$Config, [object]$Paths, [object]$State) {
   $deadline = Get-DeadlineContext $Config $State
+  $proofStatus = Get-ProofStatus $Config.repoRoot $Config.taskId
+  $timeUsedPercent = [Math]::Round(100.0 - [double]$deadline.remainingPercent, 1)
   [pscustomobject]@{
     repoRoot = $Config.repoRoot
     taskId = $Config.taskId
@@ -642,10 +689,12 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     activeBudgetSeconds = $Config.activeBudgetSeconds
     budgetExtensionSeconds = $Config.budgetExtensionSeconds
     remainingActivePercent = $deadline.remainingPercent
+    activeTimeUsedPercent = $timeUsedPercent
     supervisorPid = $State.supervisorPid
     activeChildPid = $State.activeChildPid
     iterationsStarted = $State.iterationsStarted
     maxIterations = $Config.maxIterations
+    iterationBudgetDisplay = "$($State.iterationsStarted)/$($Config.maxIterations)"
     accumulatedActiveSeconds = $State.accumulatedActiveSeconds
     remainingActiveSeconds = $State.remainingActiveSeconds
     lastHeartbeatUtc = $State.lastHeartbeatUtc
@@ -653,6 +702,8 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     lastIterationExitCode = $State.lastIterationExitCode
     lastIterationSummary = $State.lastIterationSummary
     consecutiveFailures = $State.consecutiveFailures
+    progress = if ($proofStatus) { $proofStatus.progress } else { $null }
+    progressDisplay = if ($proofStatus) { $proofStatus.progress_display } else { $null }
     taskDirectory = $Paths.TaskDirectory
     runtimeDirectory = $Paths.RuntimeDirectory
     supervisorLog = $Paths.SupervisorLog
@@ -705,7 +756,7 @@ if ($Command -eq 'init') {
 
   if (-not (Test-Path -LiteralPath $paths.Config)) {
     $config = [ordered]@{
-      schemaVersion = 2
+      schemaVersion = 3
       taskId = $TaskId
       repoRoot = $resolvedRepo
       createdAtUtc = Get-UtcNowIso

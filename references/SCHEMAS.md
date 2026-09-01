@@ -5,6 +5,8 @@ These are the required files for each task folder:
 ```text
 .agent/tasks/TASK_ID/
   spec.md
+  plan.json
+  progress.json
   evidence.md
   evidence.json
   raw/
@@ -17,6 +19,12 @@ These are the required files for each task folder:
   problems.md
   deadline-report.md  # optional; written during deadline-aware last-call
 ```
+
+## `plan.json` and `progress.json`
+
+`plan.json` is frozen from the spec's `## Work items` table. Each mandatory item has a stable ID and one or more mapped acceptance criteria. Its spec hash prevents a Worker from shrinking the denominator after implementation begins.
+
+`progress.json` contains exactly the same item IDs with one implementation state: `pending`, `in_progress`, `implemented`, or `blocked`. Builders and fixers may update implementation state, notes, and proof. Fresh verification progress is not self-reported: status derives it from the verifier verdict for each item's mapped criteria.
 
 ## `deadline-report.md`
 
@@ -137,3 +145,6 @@ This checks:
 - top-level key presence
 - allowed status values
 - task id consistency
+- frozen plan/spec hashes and exact progress item coverage
+
+Use `--artifact plan`, `progress`, `evidence`, or `verdict` for a phase gate. The supervisor calls this validator rather than duplicating evidence field checks in PowerShell.

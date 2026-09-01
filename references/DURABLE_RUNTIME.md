@@ -30,6 +30,8 @@ The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `ru
 - stop, blocked, and completion state
 - last exit code, summary, checkpoint, and failure count
 
+Status joins runtime state with the frozen proof plan and reports separate implementation, fresh-verification, and acceptance bars. `iterationsStarted/maxIterations` remains an execution-capacity counter, not task completion.
+
 ## Recovery behavior
 
 Running `start` performs these checks:
@@ -62,12 +64,14 @@ Workers see the total and remaining active minutes, remaining percentage, per-it
 ## Phase transitions
 
 ```text
-freeze -> build -> evidence -> verify
-                              | PASS -> complete
-                              | FAIL/UNKNOWN -> fix -> verify
+freeze -> build --progressed--> build -> evidence -> verify
+                                           | PASS -> complete
+                                           | FAIL/UNKNOWN -> fix --progressed--> fix -> verify
 ```
 
 Each worker must return a schema-constrained result with its phase, status, and summary. A `completed` result is accepted only when the expected phase artifact is ready. Final completion additionally requires a `PASS` verdict and successful proof-package structural validation.
+
+`progressed` means an iteration made productive partial progress while the phase remains incomplete. It resets consecutive execution failures but never advances the phase. Build completion additionally requires every immutable work-plan item to be `implemented`; fix completion requires that gate plus current valid evidence.
 
 ## Failure semantics
 

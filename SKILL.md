@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.0.0"
+  version: "3.1.0"
 ---
 
 # Deadline-Carl
@@ -12,6 +12,8 @@ Deadline-Carl is the worker who watches the clock without lying about the work. 
 
 1. The proof protocol freezes a spec, builds, records criterion-level evidence, runs a fresh independent verifier, and applies minimal fixes until every acceptance criterion passes.
 2. The external PowerShell supervisor starts fresh `codex exec` workers, gives each worker current deadline pressure, writes heartbeat and checkpoint state, enforces time and iteration budgets, terminates timed-out workers, and resumes after a manual `start` when the supervisor was interrupted.
+
+The frozen contract also produces `plan.json`, an immutable denominator of mandatory work items, plus `progress.json`, the builder's implementation state. Status reports implementation, fresh verification, and acceptance progress separately; iteration count remains a safety budget rather than a completion percentage.
 
 The supervisor is deterministic infrastructure. Codex workers make semantic decisions. Do not ask a worker to manage its own PID, heartbeat, runtime budget, or recovery state.
 
@@ -132,6 +134,8 @@ Proof artifacts remain compatible with the upstream workflow:
 ```text
 .agent/tasks/<TASK_ID>/
   spec.md
+  plan.json
+  progress.json
   evidence.md
   evidence.json
   verdict.json
@@ -152,17 +156,26 @@ Workers must not edit `.agent/durable-loop/`. `runtime.json` is atomically repla
 
 Status output also exposes `deliveryMode`, `deadlineStage`, total and extended budget, remaining percentage, and a terminal `stopReason` such as `completed`, `active-budget-exhausted`, or `max-iterations-exhausted`.
 
+It additionally exposes:
+
+- `progressDisplay.implementation`, such as `8/26`, from frozen work items marked implemented
+- `progressDisplay.verification`, from work items whose mapped criteria passed the fresh verifier
+- `progressDisplay.acceptance`, such as `1/12`, from criterion-level evidence
+- `iterationBudgetDisplay`, such as `15/120`, explicitly labeled as capacity rather than progress
+
 ## Proof phases
 
 The supervisor runs one fresh Codex process per phase:
 
-1. `freeze`: complete `spec.md` with explicit `AC1`, `AC2`, ... criteria, constraints, non-goals, and verification plan. Do not edit production code.
-2. `build`: implement only the frozen contract and run relevant checks.
+1. `freeze`: complete `spec.md` with explicit `AC1`, `AC2`, ... criteria, a stable work-item table, constraints, non-goals, and verification plan. The supervisor freezes `plan.json` and initializes `progress.json`. Do not edit production code.
+2. `build`: implement only the frozen contract and run relevant checks. Return `progressed` after productive partial work and remain in build. The phase advances only when every frozen work item is implemented.
 3. `evidence`: stop changing production code and populate criterion-level proof plus raw outputs.
 4. `verify`: use a fresh process to rerun checks and write the verdict without changing production code or evidence.
-5. `fix`: reconfirm verifier findings, apply the smallest safe changes, refresh evidence, then return to a fresh verifier.
+5. `fix`: reconfirm verifier findings, apply the smallest safe changes, update work-item progress, and refresh evidence. Partial repair returns `progressed`; a fresh verifier runs only after the build and evidence gates are both ready.
 
-Overall completion requires a `PASS` verdict and successful structural validation from `scripts/task_loop.py validate`.
+Overall completion requires all frozen work items implemented, a `PASS` verdict, and successful structural validation from `scripts/task_loop.py validate`. The PowerShell supervisor delegates artifact validation to that Python validator so schema rules have one executable source of truth.
+
+Frozen acceptance criteria may use either list form (`- AC1: ...`) or Markdown heading form (`### AC1 — ...`). The supervisor recognizes both; changing presentation must not cause a completed freeze phase to repeat.
 
 Read the upstream proof details only when needed:
 

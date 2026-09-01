@@ -25,6 +25,7 @@
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": [
           "id",
           "text",
@@ -37,7 +38,9 @@
             "type": "string"
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1,
+            "not": { "const": "TODO" }
           },
           "status": {
             "enum": [

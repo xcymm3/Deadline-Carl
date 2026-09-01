@@ -1,6 +1,6 @@
 interface:
   display_name: "Deadline-Carl"
-  short_description: "Run deadline-aware proof loops with recoverable checkpoints."
-  default_prompt: "Use $deadline-carl for this non-trivial repository task, keep proof standards fixed, adapt priorities to the remaining active-time budget, and start the recoverable supervisor only after explicit authorization."
+  short_description: "Run recoverable proof loops with frozen work-item progress."
+  default_prompt: "Use $deadline-carl for this non-trivial repository task, freeze measurable work items, report implementation and verification progress separately, keep proof standards fixed, and start the recoverable supervisor only after explicit authorization."
 policy:
   allow_implicit_invocation: false

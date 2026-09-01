@@ -66,6 +66,7 @@ if (-not $taskMatch.Success -or -not $phaseMatch.Success -or -not $root -or -not
 
 $task = $taskMatch.Groups[1].Value
 $phase = $phaseMatch.Groups[1].Value
+$resultStatus = 'completed'
 $taskDirectory = Join-Path $root ".agent\tasks\$task"
 $runtimeDirectory = Join-Path $root ".agent\durable-loop\$task"
 $marker = Join-Path $runtimeDirectory 'delay-build-once'
@@ -84,7 +85,12 @@ switch ($phase) {
 Create a proof file.
 
 ## Acceptance criteria
-- AC1: product.txt exists and contains PASS.
+### AC1 — product.txt exists and contains PASS
+
+## Work items
+| Item | Description | Acceptance criteria |
+| --- | --- | --- |
+| WI-001 | Create and prove product.txt | AC1 |
 
 ## Constraints
 - Preserve existing work.
@@ -98,6 +104,19 @@ Create a proof file.
   }
   'build' {
     'PASS' | Set-Content -LiteralPath (Join-Path $root 'product.txt') -Encoding utf8
+    $progressPath = Join-Path $taskDirectory 'progress.json'
+    $progress = Get-Content -LiteralPath $progressPath -Raw -Encoding utf8 | ConvertFrom-Json
+    if ($progress.items[0].state -eq 'pending') {
+      $progress.items[0].state = 'in_progress'
+      $progress.items[0].note = 'Product created; final check remains.'
+      $progress.items[0].proof = @('product.txt')
+      $resultStatus = 'progressed'
+    } else {
+      $progress.items[0].state = 'implemented'
+      $progress.items[0].note = 'Product and focused check complete.'
+      $progress.items[0].proof = @('product.txt')
+    }
+    $progress | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $progressPath -Encoding utf8
   }
   { $_ -in @('evidence', 'fix') } {
     [ordered]@{
@@ -131,8 +150,8 @@ Create a proof file.
 
 [ordered]@{
   phase = $phase
-  status = 'completed'
-  summary = "fake $phase completed"
+  status = $resultStatus
+  summary = "fake $phase $resultStatus"
 } | ConvertTo-Json -Compress | Set-Content -LiteralPath $output -Encoding utf8
 
 [ordered]@{ type = 'fake-codex'; phase = $phase } | ConvertTo-Json -Compress
@@ -218,16 +237,19 @@ Create a proof file.
   Wait-Until {
     $state = Read-TestState
     $state -and $state.completed -and -not $state.running
-  } 45 'The recovered loop did not complete.'
+  } 90 'The recovered loop did not complete.'
 
   $finalState = Read-TestState
   $verdict = Get-Content -LiteralPath (Join-Path $repo ".agent\tasks\$taskId\verdict.json") -Raw -Encoding utf8 | ConvertFrom-Json
   if ($verdict.overall_verdict -ne 'PASS') { throw 'The fake verifier did not produce PASS.' }
-  if ([int]$finalState.iterationsStarted -ne 4) { throw "Expected 4 iterations, got $($finalState.iterationsStarted)." }
+  if ([int]$finalState.iterationsStarted -ne 5) { throw "Expected 5 iterations, got $($finalState.iterationsStarted)." }
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'product.txt'))) { throw 'Build artifact is missing.' }
   if ($finalState.stopReason -ne 'completed') { throw 'Completed loop did not record a completed stop reason.' }
   $completedStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
   if ($completedStatus.deadlineStage -ne 'complete') { throw 'Completed status did not report the complete deadline stage.' }
+  if ($completedStatus.progressDisplay.implementation -notmatch '1/1$') { throw 'Status did not report implementation progress as 1/1.' }
+  if ($completedStatus.progressDisplay.verification -notmatch '1/1$') { throw 'Status did not report verification progress as 1/1.' }
+  if ($completedStatus.progressDisplay.acceptance -notmatch '1/1$') { throw 'Status did not report acceptance progress as 1/1.' }
 
   $firstPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-001-freeze.prompt.md") -Raw -Encoding utf8
   foreach ($requiredPromptText in @(
@@ -254,6 +276,14 @@ Create a proof file.
   }
   $legacyBackups = @(Get-ChildItem -LiteralPath (Join-Path $testCodexHome 'skills') -Directory -Filter 'codex-durable-loop.backup.*')
   if ($legacyBackups.Count -ne 1) { throw 'Installer did not preserve exactly one legacy installation backup.' }
+
+  $installedInstaller = Join-Path $installedSkill 'scripts\install_skill.ps1'
+  & $installedInstaller -CodexHome $testCodexHome -Force *> $null
+  if (-not (Test-Path -LiteralPath (Join-Path $installedSkill 'SKILL.md'))) {
+    throw 'Self-update did not restore a usable skill directory.'
+  }
+  $deadlineBackups = @(Get-ChildItem -LiteralPath (Join-Path $testCodexHome 'skills') -Directory -Filter 'deadline-carl.backup.*')
+  if ($deadlineBackups.Count -ne 1) { throw 'Self-update did not preserve exactly one existing installation backup.' }
 
   [pscustomobject]@{
     result = 'PASS'

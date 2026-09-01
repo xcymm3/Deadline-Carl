@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkItemProgress",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "task_id", "plan_sha256", "items"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "task_id": { "type": "string", "minLength": 1 },
+    "plan_sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "state", "note", "proof"],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "state": { "enum": ["pending", "in_progress", "implemented", "blocked"] },
+          "note": { "type": "string" },
+          "proof": { "type": "array" }
+        }
+      }
+    }
+  }
+}

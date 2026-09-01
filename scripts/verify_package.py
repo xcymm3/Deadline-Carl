@@ -22,7 +22,11 @@ REQUIRED_PACKAGE_PATHS = (
     "scripts/test_durable_loop.ps1",
     "references/DURABLE_RUNTIME.md",
     "assets/templates/durable-agent-prompt.md.tmpl",
+    "assets/templates/plan.json.tmpl",
+    "assets/templates/progress.json.tmpl",
     "assets/schemas/durable-iteration-result.schema.json",
+    "assets/schemas/plan.schema.json",
+    "assets/schemas/progress.schema.json",
 )
 
 
@@ -81,6 +85,8 @@ def main() -> int:
         raise SystemExit("Iteration result schema must reject additional properties.")
     if set(schema.get("required", [])) != {"phase", "status", "summary"}:
         raise SystemExit("Iteration result schema has unexpected required fields.")
+    if "progressed" not in schema.get("properties", {}).get("status", {}).get("enum", []):
+        raise SystemExit("Iteration result schema must support productive partial progress.")
 
     task_loop = skill_root / "scripts/task_loop.py"
     with tempfile.TemporaryDirectory(prefix="deadline-carl-") as temp_directory:
@@ -118,6 +124,64 @@ def main() -> int:
         if not validate_json.get("valid") or not status_json.get("exists"):
             raise SystemExit("Proof-loop task initialization or validation failed.")
 
+        task_dir = repo / ".agent/tasks/demo-task"
+        (task_dir / "spec.md").write_text(
+            """# Task Spec: demo-task
+
+## Acceptance criteria
+### AC1 — Demo proof
+
+## Work items
+| Item | Description | Acceptance criteria |
+| --- | --- | --- |
+| WI-001 | Produce demo proof | AC1 |
+
+## Constraints
+- Preserve existing work.
+
+## Non-goals
+- No unrelated changes.
+""",
+            encoding="utf-8",
+        )
+        run(
+            [
+                sys.executable,
+                str(task_loop),
+                "sync-plan",
+                "--task-id",
+                "demo-task",
+                "--force",
+                "--migrate-evidence",
+            ],
+            repo,
+        )
+        planned_status = json.loads(
+            run([sys.executable, str(task_loop), "status", "--task-id", "demo-task"], repo).stdout
+        )
+        if planned_status.get("progress", {}).get("work_items_total") != 1:
+            raise SystemExit("Work-plan status did not expose a stable 0/1 denominator.")
+
+        bad_evidence = json.loads((task_dir / "evidence.json").read_text(encoding="utf-8"))
+        bad_evidence["acceptance_criteria"][0].pop("text", None)
+        (task_dir / "evidence.json").write_text(json.dumps(bad_evidence, indent=2), encoding="utf-8")
+        bad_evidence_result = subprocess.run(
+            [
+                sys.executable,
+                str(task_loop),
+                "validate",
+                "--task-id",
+                "demo-task",
+                "--artifact",
+                "evidence",
+            ],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+        )
+        if bad_evidence_result.returncode == 0 or "missing key: text" not in bad_evidence_result.stdout:
+            raise SystemExit("Evidence validation did not reject the historical missing-text regression.")
+
         sentinel = repo / ".agent/tasks/demo-task/.init-in-progress"
         sentinel.write_text("test\n", encoding="utf-8")
         race_result = subprocess.run(
@@ -133,6 +197,8 @@ def main() -> int:
 
         expected_generated_paths = (
             ".agent/tasks/demo-task/spec.md",
+            ".agent/tasks/demo-task/plan.json",
+            ".agent/tasks/demo-task/progress.json",
             ".agent/tasks/demo-task/evidence.json",
             ".agent/tasks/demo-task/verdict.json",
             ".codex/agents/task-spec-freezer.toml",
