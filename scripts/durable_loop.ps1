@@ -675,6 +675,10 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
   $deadline = Get-DeadlineContext $Config $State
   $proofStatus = Get-ProofStatus $Config.repoRoot $Config.taskId
   $timeUsedPercent = [Math]::Round(100.0 - [double]$deadline.remainingPercent, 1)
+  $nonPassCriteria = @()
+  if ($proofStatus -and $proofStatus.non_pass_criteria) {
+    $nonPassCriteria = @($proofStatus.non_pass_criteria)
+  }
   [pscustomobject]@{
     repoRoot = $Config.repoRoot
     taskId = $Config.taskId
@@ -702,6 +706,12 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     lastIterationExitCode = $State.lastIterationExitCode
     lastIterationSummary = $State.lastIterationSummary
     consecutiveFailures = $State.consecutiveFailures
+    proofInitialized = if ($proofStatus) { [bool]$proofStatus.exists } else { $false }
+    proofInitInProgress = if ($proofStatus) { [bool]$proofStatus.init_in_progress } else { $false }
+    evidenceOverallStatus = if ($proofStatus) { $proofStatus.evidence_overall_status } else { $null }
+    verdictOverallStatus = if ($proofStatus) { $proofStatus.verdict_overall_status } else { $null }
+    nonPassCriteria = $nonPassCriteria
+    progressError = if ($proofStatus) { $proofStatus.progress_error } else { $null }
     progress = if ($proofStatus) { $proofStatus.progress } else { $null }
     progressDisplay = if ($proofStatus) { $proofStatus.progress_display } else { $null }
     taskDirectory = $Paths.TaskDirectory

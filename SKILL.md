@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.1.0"
+  version: "3.1.1"
 ---
 
 # Deadline-Carl
@@ -118,6 +118,24 @@ Extending time does not add iteration starts. If `maxIterations` is also exhaust
 ```
 
 Do not poll status continuously. Read it when the user asks, after an interruption, or when diagnosing a stale heartbeat.
+
+### Direct progress questions
+
+When the user asks "what is the current progress?", "how far along is it?", "what remains?", or an equivalent question, read fresh status before answering. Use `durable_loop.ps1 status` for a supervised task; do not infer current progress only from chat history or the latest worker summary.
+
+Reply in the user's language as a concise human-readable status, not raw JSON unless the user requests machine-readable output. Present these fields in order:
+
+1. task ID and overall state: `completed`, `blocked`, `running`, or stopped but incomplete
+2. current proof phase and its plain-language meaning
+3. implementation, fresh-verification, and acceptance progress as separate exact counts
+4. remaining active-time budget, remaining percentage, and deadline stage
+5. latest concrete activity or checkpoint
+6. current blocker, stop reason, or non-PASS acceptance gaps; say none when there is no known blocker
+7. the next expected action
+
+Use only values supported by the current status and proof artifacts. Say that a value is not available when its denominator or artifact does not exist. Never turn `iterationBudgetDisplay` into task completion; mention it only when execution capacity is relevant and label it as iteration capacity. Never report overall completion merely because one progress bar reached its denominator. Overall completion still requires `completed: true`, a fresh-verifier `PASS`, and successful proof validation.
+
+Use the response template and phase/state mappings in `references/COMMANDS.md` when handling a direct progress question.
 
 ### Safe stop
 

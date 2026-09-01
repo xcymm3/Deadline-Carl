@@ -399,11 +399,57 @@ Choose between this path and the simpler serial order automatically from the fro
 
 Parent action:
 
-```bash
-scripts/task_loop.py status --task-id <TASK_ID>
+```powershell
+& scripts/durable_loop.ps1 status -RepoRoot <REPO_ROOT> -TaskId <TASK_ID>
 ```
 
-If the repo is not yet initialized, run `init` first.
+If the repo is not yet initialized, report that no tracked progress exists. Run `init` only when the user has asked to initialize or start the task.
 Do not run `status` or `validate` in parallel with `init`; wait for `init` to finish first. If `status` reports `init_in_progress: true`, retry later.
 
 Read `progressDisplay.implementation`, `progressDisplay.verification`, and `progressDisplay.acceptance` as task progress. Treat `iterationBudgetDisplay` only as retry capacity.
+
+### User-facing progress response
+
+When the user directly asks for current progress, obtain fresh status and translate it into the user's language. Do not paste the JSON by default and do not answer from chat memory alone.
+
+Determine the headline state in this order:
+
+1. `completed: true`: completed and independently verified
+2. `blocked: true`: blocked; include `blockedReason`
+3. `running: true`: running; include the current phase
+4. otherwise: stopped and incomplete; include `stopReason` when present
+
+Translate phases by meaning rather than exposing only the internal token:
+
+- `freeze`: freezing the task contract and work plan
+- `build`: implementing frozen work items
+- `evidence`: packaging criterion-level evidence
+- `verify`: running fresh independent verification
+- `fix`: repairing verifier findings
+
+Use this compact response shape, omitting no required line even when a value is unavailable:
+
+```text
+Current status: <overall state> — <plain-language phase meaning>
+Task: <taskId> (<repoRoot>)
+- Implementation: <implemented>/<work_items_total>
+- Fresh verification: <verified>/<work_items_total>
+- Acceptance: <criteria_pass>/<criteria_total> passed (<criteria_fail> failed, <criteria_unknown> unknown)
+- Active-time budget: <friendly remaining duration> remaining (<remainingActivePercent>%, <deadlineStage>)
+- Latest activity: <lastIterationSummary>; checkpoint <lastCheckpointUtc>
+- Blockers/gaps: <blockedReason, stopReason, or summarized nonPassCriteria; otherwise "none known">
+- Next: <one phase-appropriate action>
+```
+
+Derive the next action from the current state:
+
+- completed: no further task work; offer proof details only if useful
+- blocked: resolve the reported blocker before an explicitly authorized forced resume
+- stopped but incomplete: resume with `start` only when authorized
+- `freeze`: finish and freeze the spec and immutable work plan
+- `build`: implement the remaining frozen work items
+- `evidence`: finish evidence packaging without production edits
+- `verify`: wait for or complete fresh verification
+- `fix`: repair the reported non-PASS criteria, then verify again
+
+If the task artifacts are not initialized, say that no tracked progress exists yet and identify initialization as the next action. If initialization is still in progress, say so and retry later. Do not describe an implementation ratio as an overall completion percentage, and do not use `iterationsStarted/maxIterations` as work progress.

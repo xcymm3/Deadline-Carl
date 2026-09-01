@@ -250,6 +250,10 @@ Create a proof file.
   if ($completedStatus.progressDisplay.implementation -notmatch '1/1$') { throw 'Status did not report implementation progress as 1/1.' }
   if ($completedStatus.progressDisplay.verification -notmatch '1/1$') { throw 'Status did not report verification progress as 1/1.' }
   if ($completedStatus.progressDisplay.acceptance -notmatch '1/1$') { throw 'Status did not report acceptance progress as 1/1.' }
+  if (-not $completedStatus.proofInitialized) { throw 'Status did not report initialized proof artifacts.' }
+  if ($completedStatus.evidenceOverallStatus -ne 'PASS') { throw 'Status did not expose the PASS evidence state.' }
+  if ($completedStatus.verdictOverallStatus -ne 'PASS') { throw 'Status did not expose the PASS verifier state.' }
+  if (@($completedStatus.nonPassCriteria).Count -ne 0) { throw 'Completed status reported unexpected non-PASS criteria.' }
 
   $firstPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-001-freeze.prompt.md") -Raw -Encoding utf8
   foreach ($requiredPromptText in @(
