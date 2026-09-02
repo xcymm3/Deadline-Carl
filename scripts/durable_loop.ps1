@@ -84,6 +84,7 @@ function Assert-TaskId([string]$Value) {
 
 function Get-LoopPaths([string]$Root, [string]$Id) {
   $runtimeDirectory = Join-Path $Root ".agent\durable-loop\$Id"
+  $scratchDirectory = Join-Path $Root ".agent\deadline-carl-scratch\$Id"
   return [pscustomobject]@{
     RuntimeDirectory = $runtimeDirectory
     Config = Join-Path $runtimeDirectory 'config.json'
@@ -91,6 +92,7 @@ function Get-LoopPaths([string]$Root, [string]$Id) {
     Logs = Join-Path $runtimeDirectory 'logs'
     SupervisorLog = Join-Path $runtimeDirectory 'logs\supervisor.log'
     TaskDirectory = Join-Path $Root ".agent\tasks\$Id"
+    ScratchDirectory = $scratchDirectory
   }
 }
 
@@ -171,6 +173,10 @@ function Ensure-StateFields([object]$State, [object]$Config) {
     currentStdoutPath = $null
     currentStderrPath = $null
     currentSummaryPath = $null
+    currentScratchDirectory = $null
+    activeArtifactSnapshot = $null
+    lastWriteBoundaryStatus = 'not-run'
+    lastWriteBoundaryViolations = @()
     lastHeartbeatUtc = $null
     lastTickUtc = $null
     lastCheckpointUtc = $null
@@ -191,6 +197,69 @@ function Ensure-StateFields([object]$State, [object]$Config) {
     [int]$Config.activeBudgetSeconds - [int]$State.accumulatedActiveSeconds
   )
   return $State
+}
+
+function Get-TaskArtifactSnapshot([string]$TaskDirectory) {
+  $snapshot = [ordered]@{}
+  if (-not (Test-Path -LiteralPath $TaskDirectory)) { return $snapshot }
+  foreach ($file in @(Get-ChildItem -LiteralPath $TaskDirectory -File -Recurse -Force | Sort-Object FullName)) {
+    $relativePath = $file.FullName.Substring($TaskDirectory.Length).TrimStart('\', '/').Replace('\', '/')
+    try {
+      $snapshot[$relativePath] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    } catch {
+      $snapshot[$relativePath] = '<unreadable>'
+    }
+  }
+  return $snapshot
+}
+
+function Convert-SnapshotToMap([object]$Snapshot) {
+  $map = @{}
+  if ($null -eq $Snapshot) { return $map }
+  if ($Snapshot -is [System.Collections.IDictionary]) {
+    foreach ($key in $Snapshot.Keys) { $map[[string]$key] = [string]$Snapshot[$key] }
+  } else {
+    foreach ($property in $Snapshot.PSObject.Properties) {
+      $map[[string]$property.Name] = [string]$property.Value
+    }
+  }
+  return $map
+}
+
+function Test-PhaseArtifactWriteAllowed([string]$Phase, [string]$RelativePath) {
+  $path = $RelativePath.Replace('\', '/').ToLowerInvariant()
+  if ($path -eq 'deadline-report.md') { return $true }
+  switch ($Phase) {
+    'freeze' { return $path -eq 'spec.md' }
+    'build' { return $path -eq 'progress.json' }
+    'evidence' { return $path -in @('evidence.md', 'evidence.json') -or $path.StartsWith('raw/') }
+    'verify' { return $path -in @('verdict.json', 'problems.md') }
+    'fix' { return $path -in @('progress.json', 'evidence.md', 'evidence.json') -or $path.StartsWith('raw/') }
+    default { return $false }
+  }
+}
+
+function Test-PhaseWriteBoundary([string]$Phase, [object]$BeforeSnapshot, [string]$TaskDirectory) {
+  if ($null -eq $BeforeSnapshot) {
+    return [pscustomobject]@{ checked = $false; passed = $true; violations = @() }
+  }
+  $before = Convert-SnapshotToMap $BeforeSnapshot
+  $after = Convert-SnapshotToMap (Get-TaskArtifactSnapshot $TaskDirectory)
+  $allPaths = @($before.Keys) + @($after.Keys) | Sort-Object -Unique
+  $violations = [System.Collections.Generic.List[string]]::new()
+  foreach ($path in $allPaths) {
+    $beforeHasPath = $before.ContainsKey($path)
+    $afterHasPath = $after.ContainsKey($path)
+    if ($beforeHasPath -and $afterHasPath -and $before[$path] -eq $after[$path]) { continue }
+    if (Test-PhaseArtifactWriteAllowed $Phase $path) { continue }
+    $change = if (-not $beforeHasPath) { 'created' } elseif (-not $afterHasPath) { 'deleted' } else { 'modified' }
+    $violations.Add("${change}:$path")
+  }
+  return [pscustomobject]@{
+    checked = $true
+    passed = $violations.Count -eq 0
+    violations = @($violations)
+  }
 }
 
 function Get-DeadlineContext([object]$Config, [object]$State) {
@@ -448,6 +517,7 @@ function New-IterationPrompt([object]$Config, [object]$State) {
     Replace('{{REMAINING_ITERATIONS}}', [string]$context.remainingIterations).
     Replace('{{DEADLINE_GUIDANCE}}', [string]$context.guidance).
     Replace('{{TASK_HELPER}}', [string]$TaskHelper).
+    Replace('{{SCRATCH_DIR}}', [string]$State.currentScratchDirectory).
     Replace('{{IMPLEMENTATION_PROGRESS}}', $implementationProgress).
     Replace('{{VERIFICATION_PROGRESS}}', $verificationProgress).
     Replace('{{ACCEPTANCE_PROGRESS}}', $acceptanceProgress)
@@ -478,7 +548,11 @@ function Start-CodexIteration(
   $stdoutPath = Join-Path $Paths.Logs "iteration-$suffix.jsonl"
   $stderrPath = Join-Path $Paths.Logs "iteration-$suffix.stderr.log"
   $summaryPath = Join-Path $Paths.Logs "iteration-$suffix.final.json"
+  $scratchPath = Join-Path $Paths.ScratchDirectory "iteration-$suffix"
   Ensure-Directory $Paths.Logs
+  Ensure-Directory $scratchPath
+  $State.currentScratchDirectory = $scratchPath
+  $State.activeArtifactSnapshot = Get-TaskArtifactSnapshot $Paths.TaskDirectory
   [System.IO.File]::WriteAllText(
     $promptPath,
     (New-IterationPrompt $Config $State),
@@ -511,15 +585,32 @@ function Start-CodexIteration(
     ) + $arguments
   }
 
-  $process = Start-Process `
-    -FilePath $launcherPath `
-    -ArgumentList ($launcherArguments -join ' ') `
-    -WorkingDirectory $Config.repoRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardInput $promptPath `
-    -RedirectStandardOutput $stdoutPath `
-    -RedirectStandardError $stderrPath `
-    -PassThru
+  $iterationEnvironment = [ordered]@{
+    DEADLINE_CARL_TASK_ID = [string]$Config.taskId
+    DEADLINE_CARL_PHASE = [string]$State.phase
+    DEADLINE_CARL_ITERATION = [string]$iteration
+    DEADLINE_CARL_OUTPUT_DIR = [string]$scratchPath
+  }
+  $previousEnvironment = @{}
+  foreach ($entry in $iterationEnvironment.GetEnumerator()) {
+    $previousEnvironment[$entry.Key] = [Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+    [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+  }
+  try {
+    $process = Start-Process `
+      -FilePath $launcherPath `
+      -ArgumentList ($launcherArguments -join ' ') `
+      -WorkingDirectory $Config.repoRoot `
+      -WindowStyle Hidden `
+      -RedirectStandardInput $promptPath `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath `
+      -PassThru
+  } finally {
+    foreach ($entry in $iterationEnvironment.GetEnumerator()) {
+      [Environment]::SetEnvironmentVariable($entry.Key, $previousEnvironment[$entry.Key], 'Process')
+    }
+  }
   $null = $process.Handle
 
   $State.iterationsStarted = $iteration
@@ -578,7 +669,10 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   $result = Read-IterationResult ([string]$state.currentSummaryPath)
   $validExit = $null -eq $ExitCode -or [int]$ExitCode -eq 0
   $validResult = $null -ne $result -and $result.phase -eq $phase
-  if ($validExit -and $validResult -and $result.status -eq 'completed' -and $phase -eq 'freeze' -and (Test-FrozenSpec $Paths)) {
+  $writeBoundary = Test-PhaseWriteBoundary $phase $state.activeArtifactSnapshot $Paths.TaskDirectory
+  $state.lastWriteBoundaryStatus = if (-not $writeBoundary.checked) { 'not-checked' } elseif ($writeBoundary.passed) { 'pass' } else { 'fail' }
+  $state.lastWriteBoundaryViolations = @($writeBoundary.violations)
+  if ($writeBoundary.passed -and $validExit -and $validResult -and $result.status -eq 'completed' -and $phase -eq 'freeze' -and (Test-FrozenSpec $Paths)) {
     Invoke-ProofPlanSync $Config.repoRoot $Config.taskId $true $true | Out-Null
   }
   $artifactsReady = Test-PhaseArtifacts $phase $Paths
@@ -588,13 +682,19 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   $state.activeChildStartedAtUtc = $null
   $state.activeIterationStartedAtUtc = $null
   $state.currentIterationActive = $false
+  $state.activeArtifactSnapshot = $null
   $state.lastCheckpointUtc = Get-UtcNowIso
 
   if ($validResult) {
     $state.lastIterationSummary = [string]$result.summary
   }
 
-  if ($validResult -and $result.status -eq 'blocked') {
+  if (-not $writeBoundary.passed) {
+    $state.consecutiveFailures = [int]$state.consecutiveFailures + 1
+    $state.blocked = $true
+    $state.lastIterationSummary = "Phase $phase crossed its task-artifact write boundary: $(@($writeBoundary.violations) -join ', ')"
+    $state.blockedReason = $state.lastIterationSummary
+  } elseif ($validResult -and $result.status -eq 'blocked') {
     $state.blocked = $true
     $state.blockedReason = [string]$result.summary
   } elseif ($validExit -and $validResult -and $result.status -eq 'progressed') {
@@ -714,8 +814,13 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     progressError = if ($proofStatus) { $proofStatus.progress_error } else { $null }
     progress = if ($proofStatus) { $proofStatus.progress } else { $null }
     progressDisplay = if ($proofStatus) { $proofStatus.progress_display } else { $null }
+    gitHygiene = if ($proofStatus) { $proofStatus.git_hygiene } else { $null }
     taskDirectory = $Paths.TaskDirectory
     runtimeDirectory = $Paths.RuntimeDirectory
+    scratchDirectory = $Paths.ScratchDirectory
+    currentScratchDirectory = $State.currentScratchDirectory
+    lastWriteBoundaryStatus = $State.lastWriteBoundaryStatus
+    lastWriteBoundaryViolations = @($State.lastWriteBoundaryViolations)
     supervisorLog = $Paths.SupervisorLog
   } | ConvertTo-Json -Depth 8
 }
@@ -763,6 +868,7 @@ if ($Command -eq 'init') {
   Invoke-ProofInit $resolvedRepo $TaskId
   Ensure-Directory $paths.RuntimeDirectory
   Ensure-Directory $paths.Logs
+  Ensure-Directory $paths.ScratchDirectory
 
   if (-not (Test-Path -LiteralPath $paths.Config)) {
     $config = [ordered]@{

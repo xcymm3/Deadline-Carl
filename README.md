@@ -7,7 +7,7 @@
 <p align="center"><strong>让 Codex 长任务有时间感、有证据、能恢复。</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.1.2-EF6C00" alt="Version 3.1.2">
+  <img src="https://img.shields.io/badge/version-3.2.0-EF6C00" alt="Version 3.2.0">
   <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Platform Windows">
   <img src="https://img.shields.io/badge/PowerShell-7%20recommended-5391FE" alt="PowerShell 7 recommended">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2E7D32" alt="Apache-2.0 license"></a>
@@ -28,6 +28,8 @@ Deadline-Carl 把这些隐含状态写进仓库，并用脚本执行硬约束：
 - 状态保存在磁盘上，Codex 或监督器中断后可以继续
 - 时间变少时调整优先级，但不降低 PASS 标准
 - 实现、独立验证和验收进度分开计算
+- 临时测试输出与正式验收证据隔离，Verifier 不能覆盖已经归档的 `raw/`
+- 自动忽略 PID、心跳和日志等本机状态，同时检查宽泛 ignore 和已跟踪运行文件
 - 预算耗尽或工作无法完成时，如实交付缺口，不把部分完成包装成成功
 
 | 常见做法 | Deadline-Carl |
@@ -304,7 +306,29 @@ $skill = Join-Path $codexHome 'skills\deadline-carl'
 └── logs/
 ```
 
+每个 Worker 还会获得独立的临时输出目录：
+
+```text
+.agent/deadline-carl-scratch/<TASK_ID>/iteration-<NNN>-<PHASE>/
+```
+
+该路径同时通过 `DEADLINE_CARL_OUTPUT_DIR` 环境变量提供。日常测试、截图、trace、coverage 和报告应先写入这里；只有 `evidence` 和 `fix` 阶段可以把选定结果复制进正式 `raw/`。
+
+`init` 会在项目根 `.gitignore` 中幂等维护以下精确规则，保留项目已有内容：
+
+```gitignore
+# deadline-carl:local-state:start
+/.agent/durable-loop/
+/.agent/deadline-carl-scratch/
+/.agent/tasks/*/.init-in-progress
+# deadline-carl:local-state:end
+```
+
+不要忽略整个 `.agent/`，否则规格、计划、证据和验证结论也会被隐藏。
+
 Worker 不允许编辑监督器目录。`runtime.json` 由监督器原子更新，记录当前阶段、剩余时间、心跳、进程身份、失败次数和完成状态。
+
+Supervisor 会比较每轮前后的任务工件哈希并执行阶段写入边界。如果 `verify` 覆盖 `raw/`，或其他阶段改写不归自己所有的正式工件，Loop 会进入 blocked 状态，在 `lastWriteBoundaryViolations` 中列出文件，不会自动清理或接受该轮结果。`gitHygiene` 同时报告 ignore 是否生效、正式工件是否被宽泛规则隐藏，以及本地状态是否已经被 Git 跟踪。
 
 ## 安全边界
 
@@ -312,6 +336,7 @@ Worker 不允许编辑监督器目录。`runtime.json` 由监督器原子更新�
 - 不在未经明确授权时启动后台循环
 - 不使用无限制的自动批准模式
 - 不在恢复时重置、清理或覆盖 Git 工作区
+- 越阶段写入时停止并报告，不自动回退用户文件
 - 超时后终止对应 Worker 进程树，避免留下失控子进程
 - 只有全部验收项由新验证者确认后才能标记完成
 - 预算不足时保留可用核心并记录缺口，不伪造 PASS

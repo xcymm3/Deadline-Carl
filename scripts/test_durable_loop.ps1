@@ -11,6 +11,8 @@ $repo = Join-Path $testRoot 'repo'
 $taskId = 'recovery-test'
 $statePath = Join-Path $repo ".agent\durable-loop\$taskId\runtime.json"
 $delayMarker = Join-Path $repo ".agent\durable-loop\$taskId\delay-build-once"
+$writeBoundaryMarker = Join-Path $repo ".agent\durable-loop\$taskId\violate-verify-once"
+$protectedRawPath = Join-Path $repo ".agent\tasks\$taskId\raw\test-unit.txt"
 $fakeCodex = Join-Path $testRoot 'fake-codex.ps1'
 $startedSupervisors = [System.Collections.Generic.List[int]]::new()
 
@@ -45,6 +47,7 @@ try {
   & git -C $repo init *> $null
   & git -C $repo config user.email 'durable-loop-test@example.invalid'
   & git -C $repo config user.name 'Durable Loop Test'
+  'dist/' | Set-Content -LiteralPath (Join-Path $repo '.gitignore') -Encoding utf8
 
   $fakeSource = @'
 $ErrorActionPreference = 'Stop'
@@ -70,6 +73,12 @@ $resultStatus = 'completed'
 $taskDirectory = Join-Path $root ".agent\tasks\$task"
 $runtimeDirectory = Join-Path $root ".agent\durable-loop\$task"
 $marker = Join-Path $runtimeDirectory 'delay-build-once'
+$writeBoundaryMarker = Join-Path $runtimeDirectory 'violate-verify-once'
+$scratchDirectory = $env:DEADLINE_CARL_OUTPUT_DIR
+
+if (-not $scratchDirectory -or -not (Test-Path -LiteralPath $scratchDirectory)) { exit 3 }
+if ($env:DEADLINE_CARL_TASK_ID -ne $task -or $env:DEADLINE_CARL_PHASE -ne $phase) { exit 4 }
+"scratch $phase" | Set-Content -LiteralPath (Join-Path $scratchDirectory 'worker-output.txt') -Encoding utf8
 
 if ($phase -eq 'build' -and (Test-Path -LiteralPath $marker)) {
   Remove-Item -LiteralPath $marker
@@ -138,6 +147,10 @@ Create a proof file.
     "# Evidence`n`nAC1 PASS: product.txt" | Set-Content -LiteralPath (Join-Path $taskDirectory 'evidence.md') -Encoding utf8
   }
   'verify' {
+    if (Test-Path -LiteralPath $writeBoundaryMarker) {
+      Remove-Item -LiteralPath $writeBoundaryMarker
+      'verifier must not overwrite formal evidence' | Set-Content -LiteralPath (Join-Path $taskDirectory 'raw\test-unit.txt') -Encoding utf8
+    }
     [ordered]@{
       task_id = $task
       overall_verdict = 'PASS'
@@ -183,6 +196,16 @@ No FAIL or UNKNOWN acceptance criteria remain.
   $initStatus = $initOutput | ConvertFrom-Json
   if ($initStatus.phase -ne 'freeze') { throw 'Init did not create the freeze phase.' }
   if ($initStatus.deliveryMode -ne 'deadline-aware') { throw 'Init did not enable deadline-aware delivery.' }
+  if (-not $initStatus.gitHygiene.ignore_rules_ready) { throw 'Init did not install the local-state ignore rules.' }
+  if ($initStatus.gitHygiene.proof_artifacts_ignored) { throw 'Init incorrectly ignored formal proof artifacts.' }
+  if (-not (Test-Path -LiteralPath $initStatus.scratchDirectory)) { throw 'Init did not create the scratch directory.' }
+  $protectedRawBefore = [System.IO.File]::ReadAllBytes($protectedRawPath)
+  $gitignore = Get-Content -LiteralPath (Join-Path $repo '.gitignore') -Raw -Encoding utf8
+  foreach ($entry in @('/.agent/durable-loop/', '/.agent/deadline-carl-scratch/', '/.agent/tasks/*/.init-in-progress')) {
+    if (@($gitignore -split '\r?\n') -notcontains $entry) {
+      throw "Init did not exclude Deadline-Carl local state: $entry"
+    }
+  }
 
   $extendedStatus = (& $LoopScript extend `
     -RepoRoot $repo `
@@ -209,6 +232,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
   if ($recoveredBudgetStatus.deadlineStage -ne 'craft') { throw 'Added recovery budget did not return the loop to craft stage.' }
 
   New-Item -ItemType File -Path $delayMarker -Force | Out-Null
+  New-Item -ItemType File -Path $writeBoundaryMarker -Force | Out-Null
   $startStatus = (& $LoopScript start -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
   $startedSupervisors.Add([int]$startStatus.supervisorPid)
 
@@ -245,8 +269,23 @@ No FAIL or UNKNOWN acceptance criteria remain.
 
   Wait-Until {
     $state = Read-TestState
+    $state -and $state.blocked -and -not $state.running
+  } 90 'The recovered loop did not stop on the verifier write-boundary violation.'
+
+  $blockedStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
+  if ($blockedStatus.completed) { throw 'A verifier write-boundary violation was incorrectly accepted.' }
+  if ($blockedStatus.lastWriteBoundaryStatus -ne 'fail') { throw 'Status did not report the failed write boundary.' }
+  if (-not (@($blockedStatus.lastWriteBoundaryViolations) -contains 'modified:raw/test-unit.txt')) {
+    throw 'Status did not identify the verifier-modified formal evidence file.'
+  }
+
+  [System.IO.File]::WriteAllBytes($protectedRawPath, $protectedRawBefore)
+  $resumedStatus = (& $LoopScript start -RepoRoot $repo -TaskId $taskId -Force) | ConvertFrom-Json
+  $startedSupervisors.Add([int]$resumedStatus.supervisorPid)
+  Wait-Until {
+    $state = Read-TestState
     $state -and $state.completed -and -not $state.running
-  } 90 'The recovered loop did not complete.'
+  } 60 'The loop did not complete after repairing the protected evidence and resuming.'
 
   $finalState = Read-TestState
   $verdict = Get-Content -LiteralPath (Join-Path $repo ".agent\tasks\$taskId\verdict.json") -Raw -Encoding utf8 | ConvertFrom-Json
@@ -256,7 +295,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
     throw 'The fake verifier did not replace problems.md with a zero-problem PASS report.'
   }
   if ($problems -match '(?m)^###\s+') { throw 'The PASS problems report preserved a stale problem section.' }
-  if ([int]$finalState.iterationsStarted -ne 5) { throw "Expected 5 iterations, got $($finalState.iterationsStarted)." }
+  if ([int]$finalState.iterationsStarted -ne 6) { throw "Expected 6 iterations, got $($finalState.iterationsStarted)." }
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'product.txt'))) { throw 'Build artifact is missing.' }
   if ($finalState.stopReason -ne 'completed') { throw 'Completed loop did not record a completed stop reason.' }
   $completedStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
@@ -268,6 +307,13 @@ No FAIL or UNKNOWN acceptance criteria remain.
   if ($completedStatus.evidenceOverallStatus -ne 'PASS') { throw 'Status did not expose the PASS evidence state.' }
   if ($completedStatus.verdictOverallStatus -ne 'PASS') { throw 'Status did not expose the PASS verifier state.' }
   if (@($completedStatus.nonPassCriteria).Count -ne 0) { throw 'Completed status reported unexpected non-PASS criteria.' }
+  if ($completedStatus.lastWriteBoundaryStatus -ne 'pass') { throw 'The repaired verifier pass did not satisfy the write boundary.' }
+  if (@($completedStatus.lastWriteBoundaryViolations).Count -ne 0) { throw 'The repaired verifier pass retained write-boundary violations.' }
+  if (-not $completedStatus.gitHygiene.ignore_rules_ready) { throw 'Completed status lost Git hygiene readiness.' }
+  $gitStatus = (& git -C $repo status --short --untracked-files=all | Out-String)
+  if ($gitStatus -match '\.agent/(?:durable-loop|deadline-carl-scratch)/') {
+    throw 'Runtime or scratch files leaked into Git status.'
+  }
 
   $firstPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-001-freeze.prompt.md") -Raw -Encoding utf8
   foreach ($requiredPromptText in @(
@@ -275,6 +321,8 @@ No FAIL or UNKNOWN acceptance criteria remain.
     'Delivery mode: `deadline-aware`',
     'Deadline stage: `craft`',
     'Remaining active time:',
+    'Per-iteration scratch output:',
+    'DEADLINE_CARL_OUTPUT_DIR',
     'deadline-report.md',
     'Never silently downgrade required scope'
   )) {
@@ -283,7 +331,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
     }
   }
 
-  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-005-verify.prompt.md") -Raw -Encoding utf8
+  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-006-verify.prompt.md") -Raw -Encoding utf8
   foreach ($requiredVerifierText in @(
     'replace both `verdict.json` and `problems.md` on every pass',
     'For PASS, write an explicit zero-problem report',
@@ -323,6 +371,8 @@ No FAIL or UNKNOWN acceptance criteria remain.
     iterations = $finalState.iterationsStarted
     completed = $finalState.completed
     verdict = $verdict.overall_verdict
+    blockedWriteBoundary = @($blockedStatus.lastWriteBoundaryViolations)
+    gitHygiene = $completedStatus.gitHygiene
     installedSkill = $installedSkill
   } | ConvertTo-Json -Depth 6
 } catch {

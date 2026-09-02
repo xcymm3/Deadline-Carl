@@ -13,6 +13,10 @@ python scripts/verify_package.py
 - `SKILL.md` frontmatter exists and the `name` matches the parent directory
 - the skill body is non-empty
 - Deadline-Carl status exposes delivery mode, deadline stage, budget extension, remaining percentage, and terminal stop reason
+- `init` idempotently preserves existing `.gitignore` content while ignoring only runtime, scratch, and the temporary init sentinel
+- Git hygiene reports broad rules that hide formal proof artifacts and local-state files that were already tracked
+- every Worker receives an isolated `DEADLINE_CARL_OUTPUT_DIR`
+- a verifier that modifies formal `raw/` evidence is blocked with the exact path, and the loop can resume after the operator repairs it
 - every verifier pass overwrites `problems.md`; a PASS verdict leaves an explicit zero-problem report
 - `extend` adds active budget only while stopped and is rejected while the supervisor is running
 - generated Worker prompts contain deadline pressure and last-call reporting instructions

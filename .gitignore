@@ -2,7 +2,11 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.agent/
+# deadline-carl:local-state:start
+/.agent/durable-loop/
+/.agent/deadline-carl-scratch/
+/.agent/tasks/*/.init-in-progress
+# deadline-carl:local-state:end
 .codex/
 .claude/
 .idea/

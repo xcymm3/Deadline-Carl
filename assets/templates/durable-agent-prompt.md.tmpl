@@ -6,6 +6,7 @@ You are a fresh, non-interactive Codex worker supervised by an external PowerShe
 - Task ID: `{{TASK_ID}}`
 - Current phase: `{{PHASE}}`
 - Proof artifacts: `.agent/tasks/{{TASK_ID}}/`
+- Per-iteration scratch output: `{{SCRATCH_DIR}}`
 
 ## Deadline context
 
@@ -27,6 +28,8 @@ You are a fresh, non-interactive Codex worker supervised by an external PowerShe
 
 The external supervisor owns time accounting, process control, and recovery state. Use the deadline context only to plan and prioritize; never edit `.agent/durable-loop/`.
 
+Use `{{SCRATCH_DIR}}` (also available as `DEADLINE_CARL_OUTPUT_DIR`) for transient test output, screenshots, traces, coverage, and reports. Do not point routine checks directly at the formal `raw/` evidence directory. Only the `evidence` and `fix` phases may promote selected current results into `.agent/tasks/{{TASK_ID}}/raw/`. The supervisor checks phase-specific task-artifact write boundaries and stops instead of silently accepting cross-phase changes.
+
 In `deadline-aware` mode:
 
 - Preserve every user-mandated acceptance criterion. Never silently downgrade required scope because time is short.
@@ -42,8 +45,8 @@ Execute exactly the current phase:
 
 - `freeze`: refine `spec.md` into a complete frozen contract with explicit `AC1`, `AC2`, ... criteria, constraints, non-goals, verification commands, and a stable `## Work items` table. Do not edit production code. The supervisor freezes `plan.json` from this table.
 - `build`: read `plan.json` and `progress.json`, implement pending mandatory work items, run relevant checks, and update each touched item's state, note, and proof. Do not write a final verdict. Return `progressed` while mandatory items remain; return `completed` only when every work item is `implemented`.
-- `evidence`: stop changing production code. Rerun needed checks and populate `evidence.md`, `evidence.json`, and `raw/` with criterion-by-criterion proof. Every criterion object must include `id`, non-TODO `text`, `status`, `proof`, and `gaps`. Before returning `completed`, run `python "{{TASK_HELPER}}" validate --task-id {{TASK_ID}} --repo-root "{{REPO_ROOT}}" --artifact evidence` and repair every reported schema error.
-- `verify`: act as a fresh independent verifier. Rerun the required checks, judge current repository state rather than prior claims, and replace both `verdict.json` and `problems.md` on every pass. Start `problems.md` with the verdict and the exact number of FAIL or UNKNOWN criteria. For PASS, write an explicit zero-problem report; for FAIL or UNKNOWN, write one detailed section per non-PASS criterion. Never leave the scaffold or stale findings from an earlier pass. Do not modify production code or evidence. Before returning `completed`, run `python "{{TASK_HELPER}}" validate --task-id {{TASK_ID}} --repo-root "{{REPO_ROOT}}" --artifact verdict` and repair every reported artifact error.
+- `evidence`: stop changing production code. Rerun needed checks into the supplied scratch directory, then deliberately promote only the final criterion-level proof into `evidence.md`, `evidence.json`, and `raw/`. Every criterion object must include `id`, non-TODO `text`, `status`, `proof`, and `gaps`. Before returning `completed`, run `python "{{TASK_HELPER}}" validate --task-id {{TASK_ID}} --repo-root "{{REPO_ROOT}}" --artifact evidence` and repair every reported schema error.
+- `verify`: act as a fresh independent verifier. Rerun the required checks with transient output directed to the supplied scratch directory, judge current repository state rather than prior claims, and replace both `verdict.json` and `problems.md` on every pass. Start `problems.md` with the verdict and the exact number of FAIL or UNKNOWN criteria. For PASS, write an explicit zero-problem report; for FAIL or UNKNOWN, write one detailed section per non-PASS criterion. Never leave the scaffold or stale findings from an earlier pass. Do not modify production code, evidence, or `raw/`. Before returning `completed`, run `python "{{TASK_HELPER}}" validate --task-id {{TASK_ID}} --repo-root "{{REPO_ROOT}}" --artifact verdict` and repair every reported artifact error.
 - `fix`: read the frozen spec, plan, progress, verdict, and problems; reconfirm failures, apply the smallest safe fixes, update work-item progress, and refresh evidence. Do not write the final verdict. Return `progressed` while mandatory items remain incomplete; return `completed` only when all items are implemented and evidence validation passes.
 
 Do not wait for user input. If external authorization or information is genuinely required, return `blocked` and explain it. Return `progressed` after a productive partial iteration, `failed` only when the iteration itself failed, and `completed` only after the current phase gate is satisfied. Your final response must follow the supplied JSON schema.

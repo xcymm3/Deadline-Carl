@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.1.2"
+  version: "3.2.0"
 ---
 
 # Deadline-Carl
@@ -33,7 +33,7 @@ Use `proof-first` only when the user wants the previous budget-agnostic behavior
 ## Safety boundary
 
 - Never start a background loop unless the user explicitly asks to run it.
-- Initialization changes the target repository by creating `.agent/tasks/<TASK_ID>/`, `.agent/durable-loop/<TASK_ID>/`, `.codex/agents/`, and a managed block in `AGENTS.md`.
+- Initialization changes the target repository by creating `.agent/tasks/<TASK_ID>/`, `.agent/durable-loop/<TASK_ID>/`, `.agent/deadline-carl-scratch/<TASK_ID>/`, `.codex/agents/`, a managed block in `AGENTS.md`, and an idempotent local-state block in `.gitignore`.
 - This skill never registers Windows Scheduled Tasks, services, startup entries, or recurring automations.
 - The default worker uses `codex exec --approve-for-me`, not unrestricted YOLO mode.
 - Never reset, clean, checkout, or discard existing worktree changes.
@@ -170,6 +170,15 @@ Supervisor-owned state is separate:
   logs/
 ```
 
+Transient Worker output is isolated from formal evidence:
+
+```text
+.agent/deadline-carl-scratch/<TASK_ID>/
+  iteration-<NNN>-<PHASE>/
+```
+
+The supervisor and scratch directories are local state: `init` ignores `/.agent/durable-loop/`, `/.agent/deadline-carl-scratch/`, and the temporary task initialization sentinel. Keep the proof bundle under `.agent/tasks/` available for review; do not ignore the entire `.agent/` tree.
+
 Workers must not edit `.agent/durable-loop/`. `runtime.json` is atomically replaced and contains the phase, active-time usage, heartbeat, supervisor/child identity, current log paths, failures, and completion state.
 
 Status output also exposes `deliveryMode`, `deadlineStage`, total and extended budget, remaining percentage, and a terminal `stopReason` such as `completed`, `active-budget-exhausted`, or `max-iterations-exhausted`.
@@ -180,6 +189,8 @@ It additionally exposes:
 - `progressDisplay.verification`, from work items whose mapped criteria passed the fresh verifier
 - `progressDisplay.acceptance`, such as `1/12`, from criterion-level evidence
 - `iterationBudgetDisplay`, such as `15/120`, explicitly labeled as capacity rather than progress
+- `gitHygiene`, including ignore readiness, tracked local-state files, broad rules that hide proof artifacts, and scoped managed-path status
+- `lastWriteBoundaryStatus` and `lastWriteBoundaryViolations`, showing whether the previous Worker changed task artifacts owned by another phase
 
 ## Proof phases
 
@@ -187,9 +198,11 @@ The supervisor runs one fresh Codex process per phase:
 
 1. `freeze`: complete `spec.md` with explicit `AC1`, `AC2`, ... criteria, a stable work-item table, constraints, non-goals, and verification plan. The supervisor freezes `plan.json` and initializes `progress.json`. Do not edit production code.
 2. `build`: implement only the frozen contract and run relevant checks. Return `progressed` after productive partial work and remain in build. The phase advances only when every frozen work item is implemented.
-3. `evidence`: stop changing production code and populate criterion-level proof plus raw outputs.
-4. `verify`: use a fresh process to rerun checks and replace both `verdict.json` and `problems.md` without changing production code or evidence. A PASS writes a zero-problem report; FAIL or UNKNOWN writes detailed findings. Never preserve a stale problems report from an earlier pass.
+3. `evidence`: stop changing production code, write transient check output to the supplied scratch directory, then deliberately promote selected criterion-level proof into the evidence bundle and `raw/`.
+4. `verify`: use a fresh process to rerun checks into scratch and replace both `verdict.json` and `problems.md` without changing production code, evidence, or `raw/`. A PASS writes a zero-problem report; FAIL or UNKNOWN writes detailed findings. Never preserve a stale problems report from an earlier pass.
 5. `fix`: reconfirm verifier findings, apply the smallest safe changes, update work-item progress, and refresh evidence. Partial repair returns `progressed`; a fresh verifier runs only after the build and evidence gates are both ready.
+
+Before every Worker starts, the supervisor records hashes for the formal task bundle. After it exits, the supervisor enforces the phase write set: `freeze` may change `spec.md`; `build` may change `progress.json`; `evidence` may change evidence files and `raw/`; `verify` may change only verdict and problems; `fix` may change progress and evidence. `deadline-report.md` is allowed in every phase. A cross-phase change blocks the loop with exact file diagnostics and is never reverted automatically.
 
 Overall completion requires all frozen work items implemented, a `PASS` verdict, and successful structural validation from `scripts/task_loop.py validate`. The PowerShell supervisor delegates artifact validation to that Python validator so schema rules have one executable source of truth.
 

@@ -108,6 +108,7 @@ def main() -> int:
         repo = Path(temp_directory) / "demo-repo"
         repo.mkdir(parents=True)
         run(["git", "init"], repo)
+        (repo / ".gitignore").write_text("dist/\n", encoding="utf-8")
 
         init_result = run(
             [
@@ -136,8 +137,86 @@ def main() -> int:
 
         validate_json = json.loads(validate_result.stdout)
         status_json = json.loads(status_result.stdout)
+        init_json = json.loads(init_result.stdout)
         if not validate_json.get("valid") or not status_json.get("exists"):
             raise SystemExit("Proof-loop task initialization or validation failed.")
+        if init_json.get("gitignore_action") != "appended":
+            raise SystemExit("Proof-loop init did not append its managed Git ignore block.")
+        gitignore = (repo / ".gitignore").read_text(encoding="utf-8")
+        for required_ignore in (
+            "dist/",
+            "/.agent/durable-loop/",
+            "/.agent/deadline-carl-scratch/",
+            "/.agent/tasks/*/.init-in-progress",
+        ):
+            if required_ignore not in gitignore:
+                raise SystemExit(f"Managed .gitignore lost required content: {required_ignore}")
+        repeat_init = json.loads(
+            run(
+                [
+                    sys.executable,
+                    str(task_loop),
+                    "init",
+                    "--task-id",
+                    "demo-task",
+                    "--task-text",
+                    "Implement a demo task.",
+                    "--guides",
+                    "agents",
+                    "--install-subagents",
+                    "codex",
+                ],
+                repo,
+            ).stdout
+        )
+        if repeat_init.get("gitignore_action") != "unchanged" or gitignore != (repo / ".gitignore").read_text(encoding="utf-8"):
+            raise SystemExit("Managed .gitignore update is not idempotent.")
+        hygiene = status_json.get("git_hygiene", {})
+        if not hygiene.get("ignore_rules_ready") or hygiene.get("proof_artifacts_ignored"):
+            raise SystemExit("Git hygiene did not distinguish local state from proof artifacts.")
+        if not (repo / ".agent/deadline-carl-scratch/demo-task").is_dir():
+            raise SystemExit("Proof-loop init did not create the task scratch directory.")
+
+        runtime_probe = repo / ".agent/durable-loop/demo-task/runtime.json"
+        runtime_probe.parent.mkdir(parents=True)
+        runtime_probe.write_text("{}\n", encoding="utf-8")
+        scratch_probe = repo / ".agent/deadline-carl-scratch/demo-task/probe.txt"
+        scratch_probe.write_text("scratch\n", encoding="utf-8")
+        managed_git_status = run(
+            ["git", "status", "--short", "--untracked-files=all"], repo
+        ).stdout
+        if ".agent/durable-loop/" in managed_git_status or ".agent/deadline-carl-scratch/" in managed_git_status:
+            raise SystemExit("Local runtime or scratch output leaked into Git status.")
+        if ".agent/tasks/demo-task/spec.md" not in managed_git_status:
+            raise SystemExit("Formal proof artifacts were incorrectly hidden from Git status.")
+
+        run(
+            [
+                "git",
+                "add",
+                "-f",
+                ".agent/durable-loop/demo-task/runtime.json",
+                ".agent/deadline-carl-scratch/demo-task/probe.txt",
+            ],
+            repo,
+        )
+        tracked_local_status = json.loads(
+            run([sys.executable, str(task_loop), "status", "--task-id", "demo-task"], repo).stdout
+        ).get("git_hygiene", {})
+        if not tracked_local_status.get("tracked_runtime_files") or not tracked_local_status.get("tracked_scratch_files"):
+            raise SystemExit("Git hygiene did not detect tracked local-state files.")
+        if len(tracked_local_status.get("warnings", [])) < 2:
+            raise SystemExit("Git hygiene did not explain tracked local-state files.")
+        run(
+            [
+                "git",
+                "rm",
+                "--cached",
+                ".agent/durable-loop/demo-task/runtime.json",
+                ".agent/deadline-carl-scratch/demo-task/probe.txt",
+            ],
+            repo,
+        )
 
         task_dir = repo / ".agent/tasks/demo-task"
         (task_dir / "spec.md").write_text(
@@ -267,13 +346,26 @@ No FAIL or UNKNOWN acceptance criteria remain.
         if race_result.returncode == 0 or not race_json.get("init_in_progress"):
             raise SystemExit("Proof-loop validator must reject concurrent initialization state.")
 
+        clean_ignore = (repo / ".gitignore").read_text(encoding="utf-8")
+        (repo / ".gitignore").write_text(clean_ignore + "\n/.agent/\n", encoding="utf-8")
+        broad_ignore_status = json.loads(
+            run([sys.executable, str(task_loop), "status", "--task-id", "demo-task"], repo).stdout
+        )
+        if not broad_ignore_status.get("git_hygiene", {}).get("proof_artifacts_ignored"):
+            raise SystemExit("Git hygiene did not detect a broad .agent ignore rule.")
+        if not broad_ignore_status.get("git_hygiene", {}).get("warnings"):
+            raise SystemExit("Git hygiene did not explain the broad .agent ignore conflict.")
+        (repo / ".gitignore").write_text(clean_ignore, encoding="utf-8")
+
         expected_generated_paths = (
+            ".gitignore",
             ".agent/tasks/demo-task/spec.md",
             ".agent/tasks/demo-task/plan.json",
             ".agent/tasks/demo-task/progress.json",
             ".agent/tasks/demo-task/evidence.json",
             ".agent/tasks/demo-task/verdict.json",
             ".agent/tasks/demo-task/problems.md",
+            ".agent/deadline-carl-scratch/demo-task",
             ".codex/agents/task-spec-freezer.toml",
             ".codex/agents/task-builder.toml",
             ".codex/agents/task-verifier.toml",
@@ -284,12 +376,22 @@ No FAIL or UNKNOWN acceptance criteria remain.
             if not (repo / relative_path).exists():
                 raise SystemExit(f"Proof-loop init did not create: {relative_path}")
 
+        gitignore_lines = (repo / ".gitignore").read_text(encoding="utf-8").splitlines()
+        expected_ignored_paths = (
+            "/.agent/durable-loop/",
+            "/.agent/deadline-carl-scratch/",
+            "/.agent/tasks/*/.init-in-progress",
+        )
+        for ignored_path in expected_ignored_paths:
+            if gitignore_lines.count(ignored_path) != 1:
+                raise SystemExit(f"Proof-loop init did not manage exactly one ignore rule: {ignored_path}")
+
         print(
             json.dumps(
                 {
                     "skill_root": str(skill_root),
                     "frontmatter_name": frontmatter["name"],
-                    "proof_init": json.loads(init_result.stdout),
+                    "proof_init": init_json,
                     "proof_validate": validate_json,
                     "proof_status": status_json,
                     "result": "PASS",

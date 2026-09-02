@@ -10,6 +10,8 @@ It provides manual recovery, not an operating-system service. It does not regist
 
 The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `runtime.json`, and `logs/`. Workers receive an explicit instruction not to edit that directory.
 
+`init` idempotently adds a managed local-state block to the target repository's `.gitignore`. It excludes `.agent/durable-loop/`, `.agent/deadline-carl-scratch/`, and the temporary task initialization sentinel. Runtime state contains machine-specific paths, process identities, heartbeats, and logs, so it remains local while still supporting recovery on that machine. Proof artifacts under `.agent/tasks/` are separate and are not ignored by this rule.
+
 `config.json` is immutable after initialization unless an operator edits it while the loop is stopped. It contains:
 
 - repository and task identity
@@ -31,6 +33,23 @@ The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `ru
 - last exit code, summary, checkpoint, and failure count
 
 Status joins runtime state with the frozen proof plan and reports separate implementation, fresh-verification, and acceptance bars. `iterationsStarted/maxIterations` remains an execution-capacity counter, not task completion.
+
+Status also includes `gitHygiene`, `scratchDirectory`, `currentScratchDirectory`, `lastWriteBoundaryStatus`, and `lastWriteBoundaryViolations`. Git hygiene detects missing local-state ignores, broad rules that hide `.agent/tasks/`, and runtime or scratch files already present in the Git index. It reports these conditions but never changes the index.
+
+## Scratch output and phase write sets
+
+Every iteration receives a unique `.agent/deadline-carl-scratch/<TASK_ID>/iteration-<NNN>-<PHASE>/` directory through its prompt and the `DEADLINE_CARL_OUTPUT_DIR` environment variable. Transient screenshots, traces, coverage, and test reports belong there. The evidence or fix phase explicitly promotes only selected current proof into `.agent/tasks/<TASK_ID>/raw/`.
+
+The supervisor hashes the formal task bundle before starting each Worker and checks it afterward. Allowed task-artifact writes are:
+
+- `freeze`: `spec.md`
+- `build`: `progress.json`
+- `evidence`: `evidence.md`, `evidence.json`, and `raw/`
+- `verify`: `verdict.json` and `problems.md`
+- `fix`: `progress.json`, evidence files, and `raw/`
+- every phase: `deadline-report.md`
+
+Creating, modifying, or deleting another phase's task artifact immediately blocks the loop and records exact paths. The supervisor does not revert the files. The operator must inspect and repair the reported changes before an explicitly authorized `start -Force`.
 
 ## Recovery behavior
 
@@ -79,6 +98,7 @@ Each worker must return a schema-constrained result with its phase, status, and 
 - Invalid/missing structured result: retry the same phase and increment consecutive failures.
 - Missing phase artifact: retry the same phase and increment consecutive failures.
 - Explicit worker blocker: stop and require operator resolution plus `start -Force`.
+- Cross-phase task-artifact write: block immediately with exact file diagnostics; never retry over silently contaminated evidence.
 - Repeated failures: stop after `maxConsecutiveFailures` and require inspection.
 - Codex CLI temporarily missing: keep heartbeat and retry resolution without consuming an iteration.
 - Safe stop: let the current child finish, checkpoint it, and do not start another child.

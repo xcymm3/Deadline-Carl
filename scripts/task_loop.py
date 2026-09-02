@@ -45,6 +45,13 @@ PNG_PLACEHOLDER = (
 
 MANAGED_START = "<!-- repo-task-proof-loop:start -->"
 MANAGED_END = "<!-- repo-task-proof-loop:end -->"
+GITIGNORE_START = "# deadline-carl:local-state:start"
+GITIGNORE_END = "# deadline-carl:local-state:end"
+GITIGNORE_BLOCK = """# deadline-carl:local-state:start
+/.agent/durable-loop/
+/.agent/deadline-carl-scratch/
+/.agent/tasks/*/.init-in-progress
+# deadline-carl:local-state:end"""
 CODEX_GUIDE_CANDIDATES = (
     Path("AGENTS.override.md"),
     Path("AGENTS.md"),
@@ -231,6 +238,113 @@ def upsert_managed_block(path: Path, block: str) -> str:
 
     path.write_text(new_content, encoding="utf-8")
     return action
+
+
+def upsert_gitignore(repo_root: Path) -> str:
+    path = repo_root / ".gitignore"
+    content = path.read_text(encoding="utf-8") if path.exists() else ""
+    base_content = content
+    if GITIGNORE_START in content and GITIGNORE_END in content:
+        pattern = re.compile(
+            re.escape(GITIGNORE_START) + r".*?" + re.escape(GITIGNORE_END),
+            re.DOTALL,
+        )
+        base_content = pattern.sub("", content)
+
+    managed_lines = set(GITIGNORE_BLOCK.splitlines()) | {"# Deadline-Carl local supervisor state"}
+    base_lines = [line for line in base_content.splitlines() if line.strip() not in managed_lines]
+    base_content = "\n".join(base_lines).rstrip()
+    separator = "\n\n" if base_content else ""
+    new_content = base_content + separator + GITIGNORE_BLOCK + "\n"
+    if not path.exists():
+        action = "created"
+    elif new_content == content:
+        action = "unchanged"
+    elif GITIGNORE_START in content and GITIGNORE_END in content:
+        action = "updated"
+    else:
+        action = "appended"
+
+    if new_content != content:
+        path.write_text(new_content, encoding="utf-8")
+    return action
+
+
+def git_output(repo_root: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *arguments],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+    )
+
+
+def git_path_is_ignored(repo_root: Path, relative_path: str) -> bool:
+    result = git_output(repo_root, ["check-ignore", "-q", "--no-index", "--", relative_path])
+    return result.returncode == 0
+
+
+def git_tracked_files(repo_root: Path, relative_path: str) -> list[str]:
+    result = git_output(repo_root, ["ls-files", "--", relative_path])
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def git_status_entries(repo_root: Path, task_id: str) -> list[str]:
+    result = git_output(
+        repo_root,
+        [
+            "status",
+            "--short",
+            "--untracked-files=all",
+            "--",
+            ".gitignore",
+            "AGENTS.md",
+            "CLAUDE.md",
+            ".codex/agents",
+            ".claude/agents",
+            f".agent/tasks/{task_id}",
+            f".agent/durable-loop/{task_id}",
+            f".agent/deadline-carl-scratch/{task_id}",
+        ],
+    )
+    if result.returncode != 0:
+        return []
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def git_hygiene_status(repo_root: Path, task_id: str) -> dict[str, Any]:
+    runtime_probe = f".agent/durable-loop/{task_id}/runtime.json"
+    scratch_probe = f".agent/deadline-carl-scratch/{task_id}/probe.txt"
+    sentinel_probe = f".agent/tasks/{task_id}/{INIT_SENTINEL_FILE}"
+    proof_probe = f".agent/tasks/{task_id}/spec.md"
+    tracked_runtime = git_tracked_files(repo_root, ".agent/durable-loop")
+    tracked_scratch = git_tracked_files(repo_root, ".agent/deadline-carl-scratch")
+    runtime_ignored = git_path_is_ignored(repo_root, runtime_probe)
+    scratch_ignored = git_path_is_ignored(repo_root, scratch_probe)
+    sentinel_ignored = git_path_is_ignored(repo_root, sentinel_probe)
+    proof_ignored = git_path_is_ignored(repo_root, proof_probe)
+    warnings: list[str] = []
+    if proof_ignored:
+        warnings.append("Proof artifacts under .agent/tasks are ignored by the repository's current rules.")
+    if tracked_runtime:
+        warnings.append("Runtime files are already tracked; ignore rules do not remove files from the Git index.")
+    if tracked_scratch:
+        warnings.append("Scratch files are already tracked; ignore rules do not remove files from the Git index.")
+    if not runtime_ignored or not scratch_ignored or not sentinel_ignored:
+        warnings.append("One or more Deadline-Carl local-state paths are not ignored.")
+    return {
+        "ignore_rules_ready": runtime_ignored and scratch_ignored and sentinel_ignored,
+        "runtime_ignored": runtime_ignored,
+        "scratch_ignored": scratch_ignored,
+        "init_sentinel_ignored": sentinel_ignored,
+        "proof_artifacts_ignored": proof_ignored,
+        "tracked_runtime_files": tracked_runtime,
+        "tracked_scratch_files": tracked_scratch,
+        "managed_status_entries": git_status_entries(repo_root, task_id),
+        "warnings": warnings,
+    }
 
 
 def placeholder_task_statement(task_file: str | None, task_text: str | None) -> str:
@@ -794,7 +908,10 @@ def cmd_init(args: argparse.Namespace) -> int:
     repo_root = discover_repo_root(current)
     task_id = validate_task_id(args.task_id)
     task_dir = repo_root / ".agent" / "tasks" / task_id
+    scratch_dir = repo_root / ".agent" / "deadline-carl-scratch" / task_id
+    gitignore_action = upsert_gitignore(repo_root)
     task_dir.mkdir(parents=True, exist_ok=True)
+    scratch_dir.mkdir(parents=True, exist_ok=True)
     mark_init_in_progress(task_dir)
     try:
         context = template_context(task_id, repo_root, current, args.task_file, args.task_text)
@@ -812,9 +929,12 @@ def cmd_init(args: argparse.Namespace) -> int:
             "repo_root": str(repo_root),
             "task_id": task_id,
             "task_dir": str(task_dir),
+            "scratch_dir": str(scratch_dir),
+            "gitignore_action": gitignore_action,
             "created_or_overwritten_task_files": created_files,
             "installed_or_refreshed_subagent_files": installed_agents,
             "guide_file_actions": guide_actions,
+            "git_hygiene": git_hygiene_status(repo_root, task_id),
         }
         print(json.dumps(result, indent=2))
         return 0
@@ -940,6 +1060,8 @@ def cmd_status(args: argparse.Namespace) -> int:
         "task_dir": str(task_dir),
         "exists": task_dir.exists(),
         "init_in_progress": init_sentinel_path(task_dir).exists(),
+        "scratch_dir": str(repo_root / ".agent" / "deadline-carl-scratch" / task_id),
+        "git_hygiene": git_hygiene_status(repo_root, task_id),
         "required_files_present": {},
         "evidence_overall_status": None,
         "verdict_overall_status": None,

@@ -444,6 +444,8 @@ Task: <taskId> (<repoRoot>)
 - Next: <one phase-appropriate action>
 ```
 
+When `gitHygiene.warnings` is non-empty, append a concise Git hygiene warning. When `lastWriteBoundaryStatus` is `fail`, treat `lastWriteBoundaryViolations` as the primary blocker and name the affected formal task artifacts. Never suggest that adding an ignore rule will hide or repair files that are already tracked.
+
 Derive the next action from the current state:
 
 - completed: no further task work; offer proof details only if useful
