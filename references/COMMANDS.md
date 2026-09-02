@@ -289,8 +289,6 @@ Use the currently available verification surface directly. If browser or MCP too
 
 Write:
 - .agent/tasks/<TASK_ID>/verdict.json
-
-If overall verdict is not PASS, also write:
 - .agent/tasks/<TASK_ID>/problems.md
 
 Rules:
@@ -298,10 +296,15 @@ Rules:
 - FAIL if contradicted, broken, or incomplete
 - UNKNOWN if it cannot be verified locally
 - Overall PASS only if every AC PASS
+- Replace both output files on every verification pass; never preserve the initial scaffold or stale findings
+- Begin problems.md with the task ID, overall verdict, and exact number of FAIL or UNKNOWN criteria
+- For PASS, write an explicit zero-problem report with `Open problems: 0`
+- For FAIL or UNKNOWN, write one detailed section for every non-PASS criterion
 - Do not modify production code
 - Do not edit the evidence bundle
+- Before returning, run `python "<TASK_HELPER>" validate --task-id <TASK_ID> --repo-root "<REPO_ROOT>" --artifact verdict` and repair every artifact error
 
-`problems.md` requirements for each non-PASS AC:
+Each non-PASS AC section in `problems.md` must include:
 - criterion id and text
 - status
 - why it is not proven

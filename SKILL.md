@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.1.1"
+  version: "3.1.2"
 ---
 
 # Deadline-Carl
@@ -188,7 +188,7 @@ The supervisor runs one fresh Codex process per phase:
 1. `freeze`: complete `spec.md` with explicit `AC1`, `AC2`, ... criteria, a stable work-item table, constraints, non-goals, and verification plan. The supervisor freezes `plan.json` and initializes `progress.json`. Do not edit production code.
 2. `build`: implement only the frozen contract and run relevant checks. Return `progressed` after productive partial work and remain in build. The phase advances only when every frozen work item is implemented.
 3. `evidence`: stop changing production code and populate criterion-level proof plus raw outputs.
-4. `verify`: use a fresh process to rerun checks and write the verdict without changing production code or evidence.
+4. `verify`: use a fresh process to rerun checks and replace both `verdict.json` and `problems.md` without changing production code or evidence. A PASS writes a zero-problem report; FAIL or UNKNOWN writes detailed findings. Never preserve a stale problems report from an earlier pass.
 5. `fix`: reconfirm verifier findings, apply the smallest safe changes, update work-item progress, and refresh evidence. Partial repair returns `progressed`; a fresh verifier runs only after the build and evidence gates are both ready.
 
 Overall completion requires all frozen work items implemented, a `PASS` verdict, and successful structural validation from `scripts/task_loop.py validate`. The PowerShell supervisor delegates artifact validation to that Python validator so schema rules have one executable source of truth.

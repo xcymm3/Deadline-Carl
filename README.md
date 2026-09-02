@@ -7,7 +7,7 @@
 <p align="center"><strong>让 Codex 长任务有时间感、有证据、能恢复。</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.1.1-EF6C00" alt="Version 3.1.1">
+  <img src="https://img.shields.io/badge/version-3.1.2-EF6C00" alt="Version 3.1.2">
   <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Platform Windows">
   <img src="https://img.shields.io/badge/PowerShell-7%20recommended-5391FE" alt="PowerShell 7 recommended">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2E7D32" alt="Apache-2.0 license"></a>
@@ -74,7 +74,7 @@ Deadline-Carl 有两层：
 | `freeze` | 冻结任务说明、验收标准和不可变工作项 | 规格与计划结构有效 |
 | `build` | 实现冻结的工作项并运行相关检查 | 所有强制工作项标记为已实现 |
 | `evidence` | 整理逐条验收证据和原始输出 | 证据包结构有效 |
-| `verify` | 新会话重新检查代码并给出判定 | 全部验收项 PASS 才能完成 |
+| `verify` | 新会话重新检查代码，同时覆盖判定和问题报告 | 全部验收项 PASS 且零问题报告有效才能完成 |
 | `fix` | 复核失败条件并做最小修复 | 修复和证据准备好后再次独立验证 |
 
 最终完成需要同时满足：运行时记录 `completed: true`、独立验证结果为 `PASS`、证明包结构校验通过。
@@ -290,7 +290,7 @@ $skill = Join-Path $codexHome 'skills\deadline-carl'
 ├── evidence.md             # 人类可读证据
 ├── evidence.json           # 结构化逐项证据
 ├── verdict.json            # 新验证者的判定
-├── problems.md             # 未通过项的复现与修复建议
+├── problems.md             # 每轮验证覆盖；PASS 为零问题报告，否则为详细问题
 ├── deadline-report.md      # 最后冲刺阶段的可选交付说明
 └── raw/                    # 构建、测试、Lint 和截图等原始输出
 ```

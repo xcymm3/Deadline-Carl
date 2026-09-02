@@ -119,7 +119,19 @@ Recommended shape:
 
 ## `problems.md`
 
-Required sections for each non-`PASS` criterion:
+The fresh verifier must replace this file on every verification pass. Start with a machine-checkable summary:
+
+```text
+# Problems: <TASK_ID>
+
+## Verification summary
+- Verdict: PASS, FAIL, or UNKNOWN
+- Open problems: <number of FAIL or UNKNOWN criteria>
+```
+
+For `PASS`, write `Open problems: 0` and a short statement that no `FAIL` or `UNKNOWN` criteria remain. Do not preserve findings from an earlier verification pass.
+
+For `FAIL` or `UNKNOWN`, add one section for every non-`PASS` criterion with:
 
 - criterion id and text
 - status

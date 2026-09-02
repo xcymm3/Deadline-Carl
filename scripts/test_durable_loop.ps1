@@ -145,6 +145,15 @@ Create a proof file.
       commands_run = @('Get-Content product.txt')
       artifacts_used = @('product.txt')
     } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $taskDirectory 'verdict.json') -Encoding utf8
+    @"
+# Problems: $task
+
+## Verification summary
+- Verdict: PASS
+- Open problems: 0
+
+No FAIL or UNKNOWN acceptance criteria remain.
+"@ | Set-Content -LiteralPath (Join-Path $taskDirectory 'problems.md') -Encoding utf8
   }
 }
 
@@ -241,7 +250,12 @@ Create a proof file.
 
   $finalState = Read-TestState
   $verdict = Get-Content -LiteralPath (Join-Path $repo ".agent\tasks\$taskId\verdict.json") -Raw -Encoding utf8 | ConvertFrom-Json
+  $problems = Get-Content -LiteralPath (Join-Path $repo ".agent\tasks\$taskId\problems.md") -Raw -Encoding utf8
   if ($verdict.overall_verdict -ne 'PASS') { throw 'The fake verifier did not produce PASS.' }
+  if ($problems -notmatch '(?m)^- Verdict: PASS\s*$' -or $problems -notmatch '(?m)^- Open problems: 0\s*$') {
+    throw 'The fake verifier did not replace problems.md with a zero-problem PASS report.'
+  }
+  if ($problems -match '(?m)^###\s+') { throw 'The PASS problems report preserved a stale problem section.' }
   if ([int]$finalState.iterationsStarted -ne 5) { throw "Expected 5 iterations, got $($finalState.iterationsStarted)." }
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'product.txt'))) { throw 'Build artifact is missing.' }
   if ($finalState.stopReason -ne 'completed') { throw 'Completed loop did not record a completed stop reason.' }
@@ -266,6 +280,17 @@ Create a proof file.
   )) {
     if (-not $firstPrompt.Contains($requiredPromptText)) {
       throw "Deadline-aware prompt is missing: $requiredPromptText"
+    }
+  }
+
+  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-005-verify.prompt.md") -Raw -Encoding utf8
+  foreach ($requiredVerifierText in @(
+    'replace both `verdict.json` and `problems.md` on every pass',
+    'For PASS, write an explicit zero-problem report',
+    '--artifact verdict'
+  )) {
+    if (-not $verifyPrompt.Contains($requiredVerifierText)) {
+      throw "Verifier prompt is missing the problems.md overwrite contract: $requiredVerifierText"
     }
   }
 

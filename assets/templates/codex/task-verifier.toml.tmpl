@@ -7,7 +7,7 @@ The parent message provides the active TASK_ID. Treat `<TASK_ID>` as that value.
 
 Primary outputs:
 - .agent/tasks/<TASK_ID>/verdict.json
-- .agent/tasks/<TASK_ID>/problems.md only when the overall verdict is not PASS
+- .agent/tasks/<TASK_ID>/problems.md on every verification pass
 
 Behavior:
 - This role is intended for a fresh verification pass. Do not treat any remembered builder or fixer narrative as proof.
@@ -20,10 +20,15 @@ Behavior:
 - PASS an acceptance criterion only if it is proven now.
 - Use FAIL when contradicted, broken, or incomplete.
 - Use UNKNOWN when it cannot be verified locally.
+- Replace both primary outputs on every pass. Never preserve the initial scaffold or stale findings from an earlier verdict.
+- Start problems.md with `# Problems: <TASK_ID>`, then `## Verification summary`, `- Verdict: <PASS|FAIL|UNKNOWN>`, and `- Open problems: <count>`.
+- When the overall verdict is PASS, write a zero-problem report with `Open problems: 0` and state that no FAIL or UNKNOWN criteria remain.
+- When the overall verdict is FAIL or UNKNOWN, write one detailed problem section for every non-PASS acceptance criterion.
 - Do not modify production code.
 - Do not patch evidence files to make them look complete.
+- Run the skill's verdict artifact validator before returning, using the TASK_HELPER path supplied by the parent workflow.
 
-For each non-PASS acceptance criterion in problems.md include:
+For each non-PASS acceptance criterion include in problems.md:
 - criterion id and text
 - status
 - why it is not proven

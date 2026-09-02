@@ -22,6 +22,9 @@ REQUIRED_PACKAGE_PATHS = (
     "scripts/test_durable_loop.ps1",
     "references/DURABLE_RUNTIME.md",
     "assets/templates/durable-agent-prompt.md.tmpl",
+    "assets/templates/problems.md.tmpl",
+    "assets/templates/codex/task-verifier.toml.tmpl",
+    "assets/templates/claude/task-verifier.md.tmpl",
     "assets/templates/plan.json.tmpl",
     "assets/templates/progress.json.tmpl",
     "assets/schemas/durable-iteration-result.schema.json",
@@ -77,6 +80,18 @@ def main() -> int:
     for phrase in required_skill_phrases:
         if phrase not in body:
             raise SystemExit(f"SKILL.md is missing required safety wording: {phrase}")
+
+    verifier_contract_paths = (
+        "assets/templates/durable-agent-prompt.md.tmpl",
+        "assets/templates/codex/task-verifier.toml.tmpl",
+        "assets/templates/claude/task-verifier.md.tmpl",
+    )
+    for relative_path in verifier_contract_paths:
+        contract = (skill_root / relative_path).read_text(encoding="utf-8")
+        if re.search(r"problems\.md[^\n]*(?:only when|if needed|when needed)", contract, re.IGNORECASE):
+            raise SystemExit(f"Verifier contract conditionally writes problems.md: {relative_path}")
+        if "zero-problem" not in contract:
+            raise SystemExit(f"Verifier contract does not require a zero-problem PASS report: {relative_path}")
 
     schema = json.loads(
         (skill_root / "assets/schemas/durable-iteration-result.schema.json").read_text(encoding="utf-8")
@@ -162,6 +177,63 @@ def main() -> int:
         if planned_status.get("progress", {}).get("work_items_total") != 1:
             raise SystemExit("Work-plan status did not expose a stable 0/1 denominator.")
 
+        run(
+            [
+                sys.executable,
+                str(task_loop),
+                "validate",
+                "--task-id",
+                "demo-task",
+                "--artifact",
+                "verdict",
+            ],
+            repo,
+        )
+        pass_verdict = json.loads((task_dir / "verdict.json").read_text(encoding="utf-8"))
+        pass_verdict["overall_verdict"] = "PASS"
+        pass_verdict["criteria"][0]["status"] = "PASS"
+        pass_verdict["criteria"][0]["reason"] = "Demo proof passed."
+        (task_dir / "verdict.json").write_text(json.dumps(pass_verdict, indent=2), encoding="utf-8")
+        stale_problems_result = subprocess.run(
+            [
+                sys.executable,
+                str(task_loop),
+                "validate",
+                "--task-id",
+                "demo-task",
+                "--artifact",
+                "verdict",
+            ],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+        )
+        if stale_problems_result.returncode == 0 or "Verdict must match" not in stale_problems_result.stdout:
+            raise SystemExit("Verdict validation did not reject a stale problems.md report.")
+        (task_dir / "problems.md").write_text(
+            """# Problems: demo-task
+
+## Verification summary
+- Verdict: PASS
+- Open problems: 0
+
+No FAIL or UNKNOWN acceptance criteria remain.
+""",
+            encoding="utf-8",
+        )
+        run(
+            [
+                sys.executable,
+                str(task_loop),
+                "validate",
+                "--task-id",
+                "demo-task",
+                "--artifact",
+                "verdict",
+            ],
+            repo,
+        )
+
         bad_evidence = json.loads((task_dir / "evidence.json").read_text(encoding="utf-8"))
         bad_evidence["acceptance_criteria"][0].pop("text", None)
         (task_dir / "evidence.json").write_text(json.dumps(bad_evidence, indent=2), encoding="utf-8")
@@ -201,6 +273,7 @@ def main() -> int:
             ".agent/tasks/demo-task/progress.json",
             ".agent/tasks/demo-task/evidence.json",
             ".agent/tasks/demo-task/verdict.json",
+            ".agent/tasks/demo-task/problems.md",
             ".codex/agents/task-spec-freezer.toml",
             ".codex/agents/task-builder.toml",
             ".codex/agents/task-verifier.toml",

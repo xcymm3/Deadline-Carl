@@ -752,6 +752,43 @@ def validate_verdict(data: Any, task_id: str) -> list[str]:
     return errors
 
 
+def validate_problems(content: str, task_id: str, verdict: Any) -> list[str]:
+    errors: list[str] = []
+    header = re.search(r"\A# Problems:\s*(.+?)\s*$", content, re.MULTILINE)
+    summary_verdict = re.search(r"(?m)^- Verdict:\s*(PASS|FAIL|UNKNOWN)\s*$", content)
+    open_problems = re.search(r"(?m)^- Open problems:\s*(\d+)\s*$", content)
+
+    if not header or header.group(1) != task_id:
+        errors.append("problems.md must start with the requested TASK_ID.")
+    if not summary_verdict:
+        errors.append("problems.md must report Verdict as PASS, FAIL, or UNKNOWN.")
+    if not open_problems:
+        errors.append("problems.md must report a numeric Open problems count.")
+
+    if not isinstance(verdict, dict):
+        return errors
+
+    expected_verdict = verdict.get("overall_verdict")
+    non_pass_ids = [
+        str(item.get("id"))
+        for item in verdict.get("criteria", [])
+        if isinstance(item, dict) and item.get("id") and item.get("status") in {"FAIL", "UNKNOWN"}
+    ]
+    if summary_verdict and summary_verdict.group(1) != expected_verdict:
+        errors.append("problems.md Verdict must match verdict.json overall_verdict.")
+    if open_problems and int(open_problems.group(1)) != len(non_pass_ids):
+        errors.append("problems.md Open problems must match the FAIL and UNKNOWN criterion count.")
+
+    if non_pass_ids:
+        for criterion_id in non_pass_ids:
+            pattern = rf"(?m)^###\s+{re.escape(criterion_id)}(?:\s*[:—-]|\s*$)"
+            if not re.search(pattern, content):
+                errors.append(f"problems.md is missing a section for {criterion_id}.")
+    elif re.search(r"(?m)^###\s+", content):
+        errors.append("problems.md PASS report must not preserve stale problem sections.")
+    return errors
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     current = Path(args.repo_root).resolve() if args.repo_root else Path.cwd().resolve()
     repo_root = discover_repo_root(current)
@@ -814,7 +851,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
         "plan": ["spec.md", "plan.json", "progress.json"],
         "progress": ["plan.json", "progress.json"],
         "evidence": ["spec.md", "plan.json", "progress.json", "evidence.md", "evidence.json"],
-        "verdict": ["spec.md", "plan.json", "progress.json", "evidence.json", "verdict.json"],
+        "verdict": ["spec.md", "plan.json", "progress.json", "evidence.json", "verdict.json", "problems.md"],
     }
     missing = [str(task_dir / rel) for rel in required_by_artifact[artifact] if not (task_dir / rel).exists()]
     errors: list[str] = []
@@ -830,6 +867,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
     evidence_path = task_dir / "evidence.json"
     verdict_path = task_dir / "verdict.json"
+    problems_path = task_dir / "problems.md"
     spec_path = task_dir / "spec.md"
     plan_path = task_dir / "plan.json"
     progress_path = task_dir / "progress.json"
@@ -861,12 +899,19 @@ def cmd_validate(args: argparse.Namespace) -> int:
         except Exception as exc:
             errors.append(f"Failed to parse evidence.json: {exc}")
 
+    verdict: Any = None
     if artifact in {"all", "verdict"} and verdict_path.exists() and not (artifact == "all" and scaffold_spec):
         try:
             verdict = json_load(verdict_path)
             errors.extend(validate_verdict(verdict, task_id))
         except Exception as exc:
             errors.append(f"Failed to parse verdict.json: {exc}")
+
+    if artifact in {"all", "verdict"} and problems_path.exists() and not (artifact == "all" and scaffold_spec):
+        try:
+            errors.extend(validate_problems(problems_path.read_text(encoding="utf-8"), task_id, verdict))
+        except Exception as exc:
+            errors.append(f"Failed to parse problems.md: {exc}")
 
     valid = not missing and not errors
     report = {

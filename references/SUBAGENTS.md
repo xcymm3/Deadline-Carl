@@ -83,7 +83,7 @@ Hard boundaries:
 - Must not edit production code
 - Must not patch the evidence bundle to make it look complete
 - Must write `verdict.json`
-- Must write `problems.md` only when the verdict is not `PASS`
+- Must replace `problems.md` on every pass: zero problems for `PASS`, detailed findings for `FAIL` or `UNKNOWN`
 
 ### `task-fixer`
 
@@ -173,7 +173,7 @@ For Claude Code, keep this distinction explicit:
 When you need a specific role outcome, prefer an explicit natural-language phase prompt:
 
 ```text
-Run a fresh verifier pass for TASK_ID <TASK_ID> against the current codebase and write `verdict.json`, plus `problems.md` if needed.
+Run a fresh verifier pass for TASK_ID <TASK_ID> against the current codebase. Replace both `verdict.json` and `problems.md`; write an explicit zero-problem report when the verdict is PASS.
 ```
 
 For large tasks, prefer one workflow owner per role rather than handing the entire proof loop to one general-purpose child.

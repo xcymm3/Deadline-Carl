@@ -13,6 +13,7 @@ python scripts/verify_package.py
 - `SKILL.md` frontmatter exists and the `name` matches the parent directory
 - the skill body is non-empty
 - Deadline-Carl status exposes delivery mode, deadline stage, budget extension, remaining percentage, and terminal stop reason
+- every verifier pass overwrites `problems.md`; a PASS verdict leaves an explicit zero-problem report
 - `extend` adds active budget only while stopped and is rejected while the supervisor is running
 - generated Worker prompts contain deadline pressure and last-call reporting instructions
 - `scripts/task_loop.py init --task-id demo-task --task-text "Implement a demo task."` succeeds inside a fresh temporary git repository
@@ -20,6 +21,7 @@ python scripts/verify_package.py
 - a task-local init sentinel makes `validate` report initialization-in-progress instead of only a misleading missing-files failure when `init` is still active
 - `scripts/task_loop.py status --task-id demo-task` reports `init_in_progress: true` when the init sentinel is present
 - the expected repo-local artifacts are created under `.agent/tasks/demo-task/`
+- verdict-phase validation requires `problems.md` alongside `verdict.json`
 - project-scoped subagent files are created under `.codex/agents/` and `.claude/agents/`
 - `AGENTS.md` and `CLAUDE.md` are created with managed workflow blocks
 - generated Codex agent files stay Codex-specific and do not tell Codex to read `CLAUDE.md`
