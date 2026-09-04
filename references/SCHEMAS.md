@@ -28,6 +28,8 @@ These are the required files for each task folder:
 
 ## `deadline-report.md`
 
+Worker result JSON additionally carries a nullable remaining-work `forecast`, as specified by `assets/schemas/durable-iteration-result.schema.json`. Forecasts and supervisor-owned strategy history are not proof artifacts; see [Adaptive budget](ADAPTIVE_BUDGET.md). Legacy results lacking a forecast cannot authorize polish but retain existing proof-gate behavior.
+
 This optional handoff is required when a Worker begins an iteration in the `last-call` deadline stage and the task is not already complete. It records:
 
 - the usable end-to-end core currently delivered

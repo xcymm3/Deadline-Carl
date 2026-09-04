@@ -439,12 +439,15 @@ Task: <taskId> (<repoRoot>)
 - Fresh verification: <verified>/<work_items_total>
 - Acceptance: <criteria_pass>/<criteria_total> passed (<criteria_fail> failed, <criteria_unknown> unknown)
 - Active-time budget: <friendly remaining duration> remaining (<remainingActivePercent>%, <deadlineStage>)
+- Forecast: <planning.requiredLowMinutes>–<planning.requiredHighMinutes> minutes including reserve, <planning.confidence>; <planning.reason>. Effective time: <effectiveRemainingMinutes>
 - Latest activity: <lastIterationSummary>; checkpoint <lastCheckpointUtc>
 - Blockers/gaps: <blockedReason, stopReason, or summarized nonPassCriteria; otherwise "none known">
 - Next: <one phase-appropriate action>
 ```
 
 When `gitHygiene.warnings` is non-empty, append a concise Git hygiene warning. When `lastWriteBoundaryStatus` is `fail`, treat `lastWriteBoundaryViolations` as the primary blocker and name the affected formal task artifacts. Never suggest that adding an ignore rule will hide or repair files that are already tracked.
+
+When a Worker is active, distinguish `activeWorkerStrategy` (the prompt it actually received) from `deadlineStage` (current next-dispatch planning). If estimates are missing/invalid/stale, report unavailable rather than zero. For budget/history questions, read the full `history` command (status history is truncated) and summarize local-time intervals with charged active duration and switch reasons, then `budgetAssessment` with waits, unrecorded time and blockers separately. Do not equate unused time with waste or exhaustion with insufficient initial budget. See `ADAPTIVE_BUDGET.md`.
 
 Derive the next action from the current state:
 

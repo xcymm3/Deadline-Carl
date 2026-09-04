@@ -18,6 +18,9 @@ REQUIRED_PACKAGE_PATHS = (
     "agents/openai.yaml",
     "scripts/task_loop.py",
     "scripts/durable_loop.ps1",
+    "scripts/deadline_policy.ps1",
+    "scripts/test_deadline_policy.ps1",
+    "scripts/test_deadline_runtime.ps1",
     "scripts/install_skill.ps1",
     "scripts/test_durable_loop.ps1",
     "references/DURABLE_RUNTIME.md",
@@ -98,7 +101,7 @@ def main() -> int:
     )
     if schema.get("additionalProperties") is not False:
         raise SystemExit("Iteration result schema must reject additional properties.")
-    if set(schema.get("required", [])) != {"phase", "status", "summary"}:
+    if set(schema.get("required", [])) != {"phase", "status", "summary", "forecast"}:
         raise SystemExit("Iteration result schema has unexpected required fields.")
     if "progressed" not in schema.get("properties", {}).get("status", {}).get("enum", []):
         raise SystemExit("Iteration result schema must support productive partial progress.")

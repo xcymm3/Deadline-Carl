@@ -15,7 +15,7 @@ The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `ru
 `config.json` is immutable after initialization unless an operator edits it while the loop is stopped. It contains:
 
 - repository and task identity
-- active-time budget
+- active-time budget and optional absolute UTC deadline
 - delivery mode and cumulative explicit budget extensions
 - per-iteration timeout
 - maximum iterations and consecutive failures
@@ -71,12 +71,7 @@ Only time while the supervisor is running counts toward the active-time budget. 
 
 ## Deadline-aware planning
 
-The default `deadline-aware` mode injects current budget pressure into every fresh Worker prompt:
-
-- `craft`: at least 50% remains; complete the requested scope with justified in-scope quality.
-- `focus`: 20-50% remains; stop speculative expansion and close mandatory plus high-risk integration gaps.
-- `ship`: 5-20% remains; stop optional polish and finish a coherent end-to-end core plus critical checks.
-- `last-call`: below 5% remains; stabilize, checkpoint, run the shortest critical smoke checks, and write `deadline-report.md`.
+The default `deadline-aware` mode compares fresh remaining-work ranges and verification/risk reserve with effective time and iteration capacity. It selects `polish`, `craft`, `focus`, `ship` or `last-call`; remaining percentage is display-only. See [Adaptive budget](ADAPTIVE_BUDGET.md) for exact decisions, estimate calibration, bounded quality work and UTC/active-time history.
 
 Workers see the total and remaining active minutes, remaining percentage, per-iteration timeout, and remaining iteration starts. They use this context for planning but do not own or edit runtime state. Deadline stages change work ordering, not acceptance semantics. A required criterion remains required, and the fresh verifier remains the semantic completion authority. `proof-first` retains budget enforcement without deadline-driven priority guidance.
 
@@ -88,7 +83,7 @@ freeze -> build --progressed--> build -> evidence -> verify
                                            | FAIL/UNKNOWN -> fix --progressed--> fix -> verify
 ```
 
-Each worker must return a schema-constrained result with its phase, status, and summary. A `completed` result is accepted only when the expected phase artifact is ready. Final completion additionally requires a `PASS` verdict and successful proof-package structural validation.
+Each worker must return a schema-constrained result with its phase, status, summary and nullable remaining-work forecast. A `completed` result is accepted only when the expected phase artifact is ready. Final completion additionally requires a `PASS` verdict and successful proof-package structural validation. Build completion can schedule one eligible polish iteration before evidence; it cannot skip verification.
 
 `progressed` means an iteration made productive partial progress while the phase remains incomplete. It resets consecutive execution failures but never advances the phase. Build completion additionally requires every immutable work-plan item to be `implemented`; fix completion requires that gate plus current valid evidence.
 

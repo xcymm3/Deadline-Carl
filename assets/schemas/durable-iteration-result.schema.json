@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["phase", "status", "summary"],
+  "required": ["phase", "status", "summary", "forecast"],
   "properties": {
     "phase": {
       "type": "string",
@@ -12,10 +12,55 @@
       "type": "string",
       "enum": ["progressed", "completed", "blocked", "failed"]
     },
+    "forecast": {
+      "anyOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mandatoryMinutes", "coreMinutes", "verificationMinutes", "riskMinutes", "remainingIterations", "confidence", "basis", "polish"],
+          "properties": {
+            "mandatoryMinutes": {"$ref": "#/$defs/minuteRange"},
+            "coreMinutes": {"$ref": "#/$defs/minuteRange"},
+            "verificationMinutes": {"$ref": "#/$defs/minuteRange"},
+            "riskMinutes": {"type": "number", "minimum": 0, "maximum": 1000000},
+            "remainingIterations": {"type": "integer", "minimum": 0, "maximum": 1000000},
+            "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+            "basis": {"type": "string", "minLength": 1, "maxLength": 4000},
+            "polish": {
+              "anyOf": [
+                {"type": "null"},
+                {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["id", "scopeReference", "minutes", "value", "stopCondition"],
+                  "properties": {
+                    "id": {"type": "string", "pattern": "^Q[0-9]+$"},
+                    "scopeReference": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "minutes": {"type": "number", "exclusiveMinimum": 0, "maximum": 1000000},
+                    "value": {"type": "string", "minLength": 1, "maxLength": 1000},
+                    "stopCondition": {"type": "string", "minLength": 1, "maxLength": 1000}
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
     "summary": {
       "type": "string",
       "minLength": 1,
       "maxLength": 4000
+    }
+  },
+  "$defs": {
+    "minuteRange": {
+      "type": "object", "additionalProperties": false,
+      "required": ["low", "high"],
+      "properties": {
+        "low": {"type": "number", "minimum": 0, "maximum": 1000000},
+        "high": {"type": "number", "minimum": 0, "maximum": 1000000}
+      }
     }
   }
 }

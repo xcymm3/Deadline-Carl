@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.2.0"
+  version: "3.3.0"
 ---
 
 # Deadline-Carl
@@ -19,12 +19,15 @@ The supervisor is deterministic infrastructure. Codex workers make semantic deci
 
 ## Delivery modes
 
-`deadline-aware` is the default. Every iteration receives total and remaining active time, remaining percentage, iteration timeout, remaining iteration starts, and one deterministic planning stage:
+`deadline-aware` is the default. The supervisor compares effective remaining time with fresh remaining-work forecasts, observed forecast error, verification/repair reserve and iteration capacity. Remaining percentage is display-only:
 
-- `craft` at 50% or more remaining: complete the requested scope with justified quality work.
-- `focus` at 20-50% remaining: stop speculative expansion and close mandatory criteria plus high-risk integration gaps.
-- `ship` at 5-20% remaining: stop optional polish, finish the smallest usable end-to-end core, test it, and checkpoint partial work.
-- `last-call` below 5% remaining: stabilize, run critical smoke checks, and write `deadline-report.md` with delivered core, mandatory gaps, actual checks, and a defensible extension estimate.
+- `polish`: mandatory implementation is ready and a frozen quality opportunity fits alongside revalidation and reserve; allow one bounded build iteration, never unrelated scope expansion.
+- `craft`: full delivery and conservative verification/repair reserve fit.
+- `focus`: full delivery is at risk, uncertain, or not yet estimated; close mandatory and high-risk gaps.
+- `ship`: full delivery is unlikely to fit, but a usable core and checks still fit; report missing requirements honestly.
+- `last-call`: even the core/proof path is at risk; preserve useful work, run critical checks and write `deadline-report.md`, explicitly labeling stubs and unimplemented behavior.
+
+Strategy upgrades require two fresh supporting forecasts; downgrades do not wait. Missing, invalid or stale forecasts never unlock polish. No worthwhile quality opportunity means finish early. See `references/ADAPTIVE_BUDGET.md` for forecast fields, exact decisions, history and budget interpretation.
 
 Time pressure changes execution order, never PASS semantics. User-mandated criteria remain mandatory, and incomplete work must be reported as partial rather than disguised as PASS.
 
@@ -106,7 +109,7 @@ If a genuine blocker was recorded and has been resolved:
   -AdditionalBudgetMinutes 720
 ```
 
-The extension preserves accumulated active time, proof artifacts, phase, logs, and Git state. It records the added seconds in configuration and status output.
+The extension preserves accumulated active time, proof artifacts, phase, logs, and Git state. It records the added seconds in configuration and status output. Optional `-DeadlineUtc '2026-09-05T18:00:00+08:00'` sets a timezone-explicit absolute deadline at init; effective time is the smaller of active time and time until that deadline. `extend` does not move an absolute deadline.
 
 Extending time does not add iteration starts. If `maxIterations` is also exhausted, inspect the failure pattern before choosing a new bounded task configuration.
 
@@ -114,6 +117,7 @@ Extending time does not add iteration starts. If `maxIterations` is also exhaust
 
 ```powershell
 & scripts/durable_loop.ps1 status -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening
+& scripts/durable_loop.ps1 history -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening
 & scripts/durable_loop.ps1 checkpoint -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening
 ```
 
@@ -128,7 +132,7 @@ Reply in the user's language as a concise human-readable status, not raw JSON un
 1. task ID and overall state: `completed`, `blocked`, `running`, or stopped but incomplete
 2. current proof phase and its plain-language meaning
 3. implementation, fresh-verification, and acceptance progress as separate exact counts
-4. remaining active-time budget, remaining percentage, and deadline stage
+4. remaining effective time, active-time budget, deadline strategy, estimate range/confidence and switch reason (percentage is not the decision rule)
 5. latest concrete activity or checkpoint
 6. current blocker, stop reason, or non-PASS acceptance gaps; say none when there is no known blocker
 7. the next expected action
@@ -136,6 +140,8 @@ Reply in the user's language as a concise human-readable status, not raw JSON un
 Use only values supported by the current status and proof artifacts. Say that a value is not available when its denominator or artifact does not exist. Never turn `iterationBudgetDisplay` into task completion; mention it only when execution capacity is relevant and label it as iteration capacity. Never report overall completion merely because one progress bar reached its denominator. Overall completion still requires `completed: true`, a fresh-verifier `PASS`, and successful proof validation.
 
 Use the response template and phase/state mappings in `references/COMMANDS.md` when handling a direct progress question.
+
+For questions about time allocation or whether the budget was too large/small, read `history` and summarize `strategyHistory` intervals and `budgetAssessment`, separating active time from UTC wall spans and waits. `status` includes only the last 10 intervals and 5 iterations plus full-history counts/totals. Show unrecorded legacy time as unknown. Unused time is headroom, not proof of waste; blockers and failed iterations can cause exhaustion even with a reasonable initial budget. Never fabricate a timeline for an older run.
 
 ### Safe stop
 
@@ -191,13 +197,14 @@ It additionally exposes:
 - `iterationBudgetDisplay`, such as `15/120`, explicitly labeled as capacity rather than progress
 - `gitHygiene`, including ignore readiness, tracked local-state files, broad rules that hide proof artifacts, and scoped managed-path status
 - `lastWriteBoundaryStatus` and `lastWriteBoundaryViolations`, showing whether the previous Worker changed task artifacts owned by another phase
+- `planning`, `forecast`, `activeWorkerStrategy`, `strategyHistory`, `iterationHistory`, `budgetEvents` and `budgetAssessment`; distinguish next-dispatch guidance from the strategy the current Worker actually received
 
 ## Proof phases
 
 The supervisor runs one fresh Codex process per phase:
 
 1. `freeze`: complete `spec.md` with explicit `AC1`, `AC2`, ... criteria, a stable work-item table, constraints, non-goals, and verification plan. The supervisor freezes `plan.json` and initializes `progress.json`. Do not edit production code.
-2. `build`: implement only the frozen contract and run relevant checks. Return `progressed` after productive partial work and remain in build. The phase advances only when every frozen work item is implemented.
+2. `build`: implement only the frozen contract and run relevant checks. Return `progressed` after productive partial work and remain in build. The phase advances only when every frozen work item is implemented; the supervisor may first schedule one eligible bounded polish iteration. Any resulting code still proceeds through evidence and fresh verification.
 3. `evidence`: stop changing production code, write transient check output to the supplied scratch directory, then deliberately promote selected criterion-level proof into the evidence bundle and `raw/`.
 4. `verify`: use a fresh process to rerun checks into scratch and replace both `verdict.json` and `problems.md` without changing production code, evidence, or `raw/`. A PASS writes a zero-problem report; FAIL or UNKNOWN writes detailed findings. Never preserve a stale problems report from an earlier pass.
 5. `fix`: reconfirm verifier findings, apply the smallest safe changes, update work-item progress, and refresh evidence. Partial repair returns `progressed`; a fresh verifier runs only after the build and evidence gates are both ready.
@@ -235,6 +242,8 @@ Before distributing a changed copy of this skill, run:
 
 ```powershell
 python scripts/verify_package.py
+pwsh -NoProfile -File scripts/test_deadline_policy.ps1
+pwsh -NoProfile -File scripts/test_deadline_runtime.ps1
 pwsh -NoProfile -File scripts/test_durable_loop.ps1
 ```
 

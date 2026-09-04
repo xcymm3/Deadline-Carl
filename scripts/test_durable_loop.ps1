@@ -69,6 +69,7 @@ if (-not $taskMatch.Success -or -not $phaseMatch.Success -or -not $root -or -not
 
 $task = $taskMatch.Groups[1].Value
 $phase = $phaseMatch.Groups[1].Value
+$stage = [regex]::Match($prompt, 'Deadline stage: `([^`]+)`').Groups[1].Value
 $resultStatus = 'completed'
 $taskDirectory = Join-Path $root ".agent\tasks\$task"
 $runtimeDirectory = Join-Path $root ".agent\durable-loop\$task"
@@ -107,11 +108,15 @@ Create a proof file.
 ## Non-goals
 - No unrelated edits.
 
+## Quality opportunities
+- Q1: Add a readable quality marker without changing product behavior
+
 ## Verification plan
 - Check product.txt.
 "@ | Set-Content -LiteralPath (Join-Path $taskDirectory 'spec.md') -Encoding utf8
   }
   'build' {
+    if ($stage -eq 'polish') { 'quality checked' | Set-Content -LiteralPath (Join-Path $root 'quality.txt') -Encoding utf8 }
     'PASS' | Set-Content -LiteralPath (Join-Path $root 'product.txt') -Encoding utf8
     $progressPath = Join-Path $taskDirectory 'progress.json'
     $progress = Get-Content -LiteralPath $progressPath -Raw -Encoding utf8 | ConvertFrom-Json
@@ -170,10 +175,20 @@ No FAIL or UNKNOWN acceptance criteria remain.
   }
 }
 
+$forecast = [ordered]@{
+  mandatoryMinutes = @{low=1;high=2}; coreMinutes = @{low=0.5;high=1}
+  verificationMinutes = @{low=0.5;high=1}; riskMinutes=0.5; remainingIterations=3
+  confidence='medium'; basis='WI-001 small product and measured focused check; fake integration fixture'; polish=$null
+}
+if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
+  $forecast.mandatoryMinutes = @{low=0;high=0}; $forecast.coreMinutes = @{low=0;high=0}
+  $forecast.polish = @{id='Q1';scopeReference='Add a readable quality marker without changing product behavior';minutes=0.5;value='Readable output';stopCondition='Stop on regression, preserve product'}
+}
 [ordered]@{
   phase = $phase
   status = $resultStatus
   summary = "fake $phase $resultStatus"
+  forecast = $forecast
 } | ConvertTo-Json -Compress | Set-Content -LiteralPath $output -Encoding utf8
 
 [ordered]@{ type = 'fake-codex'; phase = $phase } | ConvertTo-Json -Compress
@@ -194,6 +209,10 @@ No FAIL or UNKNOWN acceptance criteria remain.
     -DeliveryMode deadline-aware `
     -CodexExecutable $fakeCodex
   $initStatus = $initOutput | ConvertFrom-Json
+  $testConfigPath = Join-Path $repo ".agent/durable-loop/$taskId/config.json"
+  $testConfig = Get-Content -LiteralPath $testConfigPath -Raw -Encoding utf8 | ConvertFrom-Json
+  $testConfig.heartbeatSeconds = 1
+  [IO.File]::WriteAllText($testConfigPath, ($testConfig | ConvertTo-Json -Depth 10))
   if ($initStatus.phase -ne 'freeze') { throw 'Init did not create the freeze phase.' }
   if ($initStatus.deliveryMode -ne 'deadline-aware') { throw 'Init did not enable deadline-aware delivery.' }
   if (-not $initStatus.gitHygiene.ignore_rules_ready) { throw 'Init did not install the local-state ignore rules.' }
@@ -229,7 +248,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
     -AdditionalBudgetMinutes 10) | ConvertFrom-Json
   if ([int]$recoveredBudgetStatus.activeBudgetSeconds -ne 1020) { throw 'Second budget extension did not preserve accumulated time.' }
   if ([int]$recoveredBudgetStatus.budgetExtensionSeconds -ne 720) { throw 'Cumulative budget extensions were not recorded.' }
-  if ($recoveredBudgetStatus.deadlineStage -ne 'craft') { throw 'Added recovery budget did not return the loop to craft stage.' }
+  if ($recoveredBudgetStatus.deadlineStage -ne 'focus') { throw 'Without estimates, added time must not imply craft readiness.' }
 
   New-Item -ItemType File -Path $delayMarker -Force | Out-Null
   New-Item -ItemType File -Path $writeBoundaryMarker -Force | Out-Null
@@ -295,7 +314,18 @@ No FAIL or UNKNOWN acceptance criteria remain.
     throw 'The fake verifier did not replace problems.md with a zero-problem PASS report.'
   }
   if ($problems -match '(?m)^###\s+') { throw 'The PASS problems report preserved a stale problem section.' }
-  if ([int]$finalState.iterationsStarted -ne 6) { throw "Expected 6 iterations, got $($finalState.iterationsStarted)." }
+  if ([int]$finalState.iterationsStarted -ne 7) { throw "Expected 7 iterations including bounded polish, got $($finalState.iterationsStarted)." }
+  if (-not (Test-Path -LiteralPath (Join-Path $repo 'quality.txt'))) { throw 'Eligible polish was not actually executed.' }
+  if (@($finalState.iterationHistory | Where-Object strategy -eq 'polish').Count -ne 1) { throw 'Expected exactly one bounded polish iteration.' }
+  if (@($finalState.iterationHistory).Count -ne 7) { throw 'Iteration history lost an outcome across recovery.' }
+  if (@($finalState.strategyHistory | Where-Object { -not $_.endedAtUtc }).Count) { throw 'Stopped history has an unclosed interval.' }
+  $historySeconds = ($finalState.strategyHistory | Measure-Object activeSeconds -Sum).Sum + $finalState.historyBaselineActiveSeconds
+  if ([Math]::Abs($historySeconds - $finalState.accumulatedActiveSeconds) -gt 0.01) { throw 'Strategy durations do not reconcile with charged active time.' }
+  foreach ($interval in @($finalState.strategyHistory)) {
+    $span = ([DateTimeOffset]$interval.endedAtUtc - [DateTimeOffset]$interval.startedAtUtc).TotalSeconds
+    if ($span -lt 0 -or $interval.activeSeconds -gt ($span + 0.1)) { throw "History charged time outside interval: $($interval.stage) $($interval.startedAtUtc) active=$($interval.activeSeconds) span=$span" }
+  }
+  if (@($finalState.strategyHistory | Where-Object endReason -eq 'supervisor-interrupted-last-observed').Count -ne 1) { throw 'Interrupted interval not recorded.' }
   if (-not (Test-Path -LiteralPath (Join-Path $repo 'product.txt'))) { throw 'Build artifact is missing.' }
   if ($finalState.stopReason -ne 'completed') { throw 'Completed loop did not record a completed stop reason.' }
   $completedStatus = (& $LoopScript status -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
@@ -319,7 +349,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
   foreach ($requiredPromptText in @(
     '# Deadline-Carl Iteration',
     'Delivery mode: `deadline-aware`',
-    'Deadline stage: `craft`',
+    'Deadline stage: `focus`',
     'Remaining active time:',
     'Per-iteration scratch output:',
     'DEADLINE_CARL_OUTPUT_DIR',
@@ -331,7 +361,7 @@ No FAIL or UNKNOWN acceptance criteria remain.
     }
   }
 
-  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-006-verify.prompt.md") -Raw -Encoding utf8
+  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-007-verify.prompt.md") -Raw -Encoding utf8
   foreach ($requiredVerifierText in @(
     'replace both `verdict.json` and `problems.md` on every pass',
     'For PASS, write an explicit zero-problem report',
@@ -361,6 +391,14 @@ No FAIL or UNKNOWN acceptance criteria remain.
   }
   $deadlineBackups = @(Get-ChildItem -LiteralPath (Join-Path $testCodexHome 'skills') -Directory -Filter 'deadline-carl.backup.*')
   if ($deadlineBackups.Count -ne 1) { throw 'Self-update did not preserve exactly one existing installation backup.' }
+
+  $beforeStatusHash = (Get-FileHash -LiteralPath $statePath).Hash
+  & $LoopScript status -RepoRoot $repo -TaskId $taskId | Out-Null
+  if ((Get-FileHash -LiteralPath $statePath).Hash -ne $beforeStatusHash) { throw 'Status read mutated persisted history.' }
+
+  $fullHistory = (& $LoopScript history -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
+  if (@($fullHistory.iterationHistory).Count -ne 7) { throw 'History command truncated full iterations.' }
+  if (@($completedStatus.iterationHistory).Count -gt 5 -or @($completedStatus.strategyHistory).Count -gt 10) { throw 'Status should bound history output.' }
 
   [pscustomobject]@{
     result = 'PASS'
