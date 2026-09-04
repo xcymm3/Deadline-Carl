@@ -1,0 +1,8 @@
+Version: 3.3.0
+Implementation commit: 59e9f349e1a3e5ce0e9c8a3decd49ebcd4b96824
+Push to origin/main succeeded; git ls-remote matched implementation HEAD.
+Repository: https://github.com/xcymm3/Deadline-Carl
+Installed: C:\Users\86187\.codex\skills\deadline-carl
+Source files: 49; installed files: 49; SHA-256 mismatches: 0
+Backup: C:\Users\86187\.codex\skill-backups\deadline-carl.backup.20260904184249
+Proof-only follow-up does not change installed package files.

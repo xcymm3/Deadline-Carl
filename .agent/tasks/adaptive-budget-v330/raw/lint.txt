@@ -1,0 +1,7 @@
+Command: git diff --check
+Exit code: 0
+No whitespace errors; normal Windows LF/CRLF notices only.
+
+Command: python -X utf8 C:/Users/86187/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/mydoc/deadline-carl
+Exit code: 0
+Skill is valid!

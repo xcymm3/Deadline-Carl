@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "task_id": "adaptive-budget-v330",
+  "spec_sha256": "502b15d2405e75f8d1e8cb675eb5e7aa3c5e1762c922ddf67574cc5a9969fe78",
+  "items": [
+    {
+      "id": "WI-001",
+      "title": "Implement adaptive forecasting and bounded polish",
+      "ac_ids": [
+        "AC1",
+        "AC2"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-002",
+      "title": "Enforce absolute deadlines and record strategy history",
+      "ac_ids": [
+        "AC3",
+        "AC4"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-003",
+      "title": "Regression tests and package documentation",
+      "ac_ids": [
+        "AC5",
+        "AC6"
+      ],
+      "mandatory": true
+    }
+  ]
+}

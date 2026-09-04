@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "task_id": "adaptive-budget-v330",
+  "plan_sha256": "02175347327340c9016988afc35d3bb3a7b9116900eb5c15889ef0bc17e4f11c",
+  "items": [
+    {
+      "id": "WI-001",
+      "state": "implemented",
+      "note": "Adaptive policy and bounded polish implemented.",
+      "proof": [
+        "scripts/deadline_policy.ps1"
+      ]
+    },
+    {
+      "id": "WI-002",
+      "state": "implemented",
+      "note": "Deadlines, time history and assessment implemented.",
+      "proof": [
+        "scripts/durable_loop.ps1"
+      ]
+    },
+    {
+      "id": "WI-003",
+      "state": "implemented",
+      "note": "Tests, documentation, remote and installation verified.",
+      "proof": [
+        ".agent/tasks/adaptive-budget-v330/raw/delivery.txt"
+      ]
+    }
+  ]
+}

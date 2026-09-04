@@ -1,0 +1,21 @@
+Command: pwsh -NoProfile -File scripts/test_durable_loop.ps1
+Exit code: 0
+Result: PASS
+Iterations: 7
+Completed: true
+Verdict: PASS
+Exactly one polish iteration produced quality.txt; then evidence and verifier ran.
+Interrupted supervisor: 9144; adopted child: 40900; recovered supervisor: 24208.
+Protected write blocked: modified:raw/test-unit.txt
+After repair/resume, verifier replaced problems.md with zero-problem PASS.
+History totals reconcile with active time; intervals fit wall spans; status did not mutate history; full history returned all 7 iterations.
+
+Command: pwsh -NoProfile -File scripts/test_deadline_runtime.ps1
+Exit code: 0
+Result: PASS; adopted: false; stopReason: absolute-deadline-reached; exitCode: 124
+Task remains incomplete; active budget retains unused time; expired restart rejected.
+
+Command: pwsh -NoProfile -File scripts/test_deadline_runtime.ps1 -AdoptWorker
+Exit code: 0
+Result: PASS; adopted: true; stopReason: absolute-deadline-reached; exitCode: 124
+Final rerun remainingActiveSeconds: 271.0827861

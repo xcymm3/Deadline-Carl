@@ -1,0 +1,116 @@
+{
+  "task_id": "adaptive-budget-v330",
+  "overall_status": "PASS",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "text": "Adaptive policies use remaining work, confidence, risk, check reserve, capacity and observed forecast error.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/test-unit.txt",
+          "summary": "37 policy assertions passed.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AC2",
+      "text": "Polish is frozen-scope, single-attempt, bounded and followed by evidence and fresh verification.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/test-integration.txt",
+          "summary": "7-iteration regression executed one polish attempt, blocked a verifier evidence write, then recovered to PASS.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AC3",
+      "text": "Absolute deadlines constrain execution and active extensions do not move them.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/test-integration.txt",
+          "summary": "Normal and adopted Worker expiry returned 124 and incomplete absolute-deadline-reached; expired restart rejected.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AC4",
+      "text": "History records intervals, charged time, forecasts and qualified budget conclusions without fabricating old history.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/test-integration.txt",
+          "summary": "History totals reconcile, intervals fit their wall spans, interrupted history persists, status is read-only.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AC5",
+      "text": "Policy, runtime, package and Skill validation pass.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/build.txt",
+          "summary": "37 assertions, 7-iteration regression, deadline tests and package/Skill checks passed.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    },
+    {
+      "id": "AC6",
+      "text": "v3.3.0 source, documentation, remote and installation agree.",
+      "status": "PASS",
+      "proof": [
+        {
+          "type": "command",
+          "path": ".agent/tasks/adaptive-budget-v330/raw/delivery.txt",
+          "summary": "Implementation 59e9f349e1a3e5ce0e9c8a3decd49ebcd4b96824 pushed and remote matched; 49 installed files matched source SHA-256.",
+          "exit_code": 0
+        }
+      ],
+      "gaps": []
+    }
+  ],
+  "changed_files": [
+    "README.md",
+    "SKILL.md",
+    "scripts/deadline_policy.ps1",
+    "scripts/durable_loop.ps1",
+    "scripts/test_deadline_policy.ps1",
+    "scripts/test_deadline_runtime.ps1",
+    "scripts/test_durable_loop.ps1",
+    "scripts/verify_package.py",
+    "references/ADAPTIVE_BUDGET.md",
+    "references/COMMANDS.md",
+    "references/DURABLE_RUNTIME.md",
+    "references/SCHEMAS.md",
+    "assets/templates/durable-agent-prompt.md.tmpl",
+    "assets/schemas/durable-iteration-result.schema.json"
+  ],
+  "commands_for_fresh_verifier": [
+    "pwsh -NoProfile -File scripts/test_deadline_policy.ps1",
+    "pwsh -NoProfile -File scripts/test_durable_loop.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1 -AdoptWorker",
+    "python scripts/verify_package.py",
+    "python -X utf8 C:/Users/86187/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/mydoc/deadline-carl",
+    "git diff --check"
+  ],
+  "known_gaps": []
+}

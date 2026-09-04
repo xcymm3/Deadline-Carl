@@ -1,0 +1,61 @@
+{
+  "task_id": "adaptive-budget-v330",
+  "overall_verdict": "PASS",
+  "criteria": [
+    {
+      "id": "AC1",
+      "status": "PASS",
+      "reason": "37 policy assertions passed."
+    },
+    {
+      "id": "AC2",
+      "status": "PASS",
+      "reason": "7-iteration regression executed one polish attempt, blocked a verifier evidence write, then recovered to PASS."
+    },
+    {
+      "id": "AC3",
+      "status": "PASS",
+      "reason": "Normal and adopted Worker expiry returned 124 and incomplete absolute-deadline-reached; expired restart rejected."
+    },
+    {
+      "id": "AC4",
+      "status": "PASS",
+      "reason": "History totals reconcile, intervals fit their wall spans, interrupted history persists, status is read-only."
+    },
+    {
+      "id": "AC5",
+      "status": "PASS",
+      "reason": "37 assertions, 7-iteration regression, deadline tests and package/Skill checks passed."
+    },
+    {
+      "id": "AC6",
+      "status": "PASS",
+      "reason": "Implementation 59e9f349e1a3e5ce0e9c8a3decd49ebcd4b96824 pushed and remote matched; 49 installed files matched source SHA-256."
+    }
+  ],
+  "commands_run": [
+    "pwsh -NoProfile -File scripts/test_deadline_policy.ps1",
+    "pwsh -NoProfile -File scripts/test_durable_loop.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1 -AdoptWorker",
+    "python scripts/verify_package.py",
+    "python -X utf8 C:/Users/86187/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/mydoc/deadline-carl",
+    "git diff --check"
+  ],
+  "artifacts_used": [
+    "README.md",
+    "SKILL.md",
+    "scripts/deadline_policy.ps1",
+    "scripts/durable_loop.ps1",
+    "scripts/test_deadline_policy.ps1",
+    "scripts/test_deadline_runtime.ps1",
+    "scripts/test_durable_loop.ps1",
+    "scripts/verify_package.py",
+    "references/ADAPTIVE_BUDGET.md",
+    "references/COMMANDS.md",
+    "references/DURABLE_RUNTIME.md",
+    "references/SCHEMAS.md",
+    "assets/templates/durable-agent-prompt.md.tmpl",
+    "assets/schemas/durable-iteration-result.schema.json"
+  ]
+}
