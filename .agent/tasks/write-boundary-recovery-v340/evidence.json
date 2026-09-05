@@ -1,0 +1,70 @@
+{
+  "task_id": "write-boundary-recovery-v340",
+  "overall_status": "PASS",
+  "acceptance_criteria": [
+    {
+      "id": "AC1",
+      "text": "Every Worker prompt prominently lists the exact formal task artifacts writable in the current phase and prevents auxiliary instructions from expanding the allowlist.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/test-integration.txt", "summary": "End-to-end prompts contained the phase allowlist, communication rule, and Hallmark path classification.", "exit_code": 0}],
+      "gaps": []
+    },
+    {
+      "id": "AC2",
+      "text": "Each iteration exports machine-readable formal-task, scratch, and JSON allowlist environment variables and distinguishes output classes.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/test-integration.txt", "summary": "The fake Worker validated all DEADLINE_CARL path variables and phase-specific JSON lists in every phase.", "exit_code": 0}],
+      "gaps": []
+    },
+    {
+      "id": "AC3",
+      "text": "Created-only violations are quarantined and retried, while modified, deleted, unsafe, and mixed violations remain hard blockers.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/test-integration.txt", "summary": "The build extra file was moved with a manifest and retried; a verifier modification of raw/test-unit.txt blocked immediately and was not quarantined.", "exit_code": 0}],
+      "gaps": []
+    },
+    {
+      "id": "AC4",
+      "text": "repair-boundary safely repairs only eligible stopped created-only blockers without starting the loop.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/test-unit.txt", "summary": "Dedicated recovery test passed one repair and four refusal cases for modified, deleted, missing, and traversal paths.", "exit_code": 0}],
+      "gaps": []
+    },
+    {
+      "id": "AC5",
+      "text": "Documentation, package validation, Skill validation, and regression tests cover the contract.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/build.txt", "summary": "Package validation and Skill Creator validation passed; policy, runtime, boundary, and full E2E suites passed.", "exit_code": 0}],
+      "gaps": []
+    },
+    {
+      "id": "AC6",
+      "text": "Source, origin/main, and the installed Codex Skill are synchronized at v3.4.0.",
+      "status": "PASS",
+      "proof": [{"type": "command", "path": ".agent/tasks/write-boundary-recovery-v340/raw/delivery.txt", "summary": "The implementation commit was pushed and matched origin/main before this proof-only commit; installed v3.4.0 contained 51/51 matching package hashes.", "exit_code": 0}],
+      "gaps": []
+    }
+  ],
+  "changed_files": [
+    "README.md",
+    "SKILL.md",
+    "assets/templates/durable-agent-prompt.md.tmpl",
+    "references/COMMANDS.md",
+    "references/DURABLE_RUNTIME.md",
+    "references/WRITE_BOUNDARIES.md",
+    "scripts/durable_loop.ps1",
+    "scripts/test_boundary_recovery.ps1",
+    "scripts/test_durable_loop.ps1",
+    "scripts/verify_package.py"
+  ],
+  "commands_for_fresh_verifier": [
+    "pwsh -NoProfile -File scripts/test_deadline_policy.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1",
+    "pwsh -NoProfile -File scripts/test_boundary_recovery.ps1",
+    "pwsh -NoProfile -File scripts/test_durable_loop.ps1",
+    "python scripts/verify_package.py",
+    "python -X utf8 C:/Users/86187/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/mydoc/deadline-carl",
+    "git diff --check"
+  ],
+  "known_gaps": []
+}

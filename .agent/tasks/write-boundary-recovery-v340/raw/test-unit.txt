@@ -1,0 +1,5 @@
+PASS
+
+- test_deadline_policy.ps1: 37 assertions passed
+- test_boundary_recovery.ps1: one created-only repair passed
+- repair-boundary refusal cases: modified, deleted, missing, traversal (4/4)

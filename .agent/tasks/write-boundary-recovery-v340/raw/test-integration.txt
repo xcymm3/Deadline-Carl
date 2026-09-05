@@ -1,0 +1,9 @@
+PASS
+
+- test_deadline_runtime.ps1: absolute-deadline runtime behavior passed with exit code 124 at the expected deadline
+- test_durable_loop.ps1: completed PASS in 6 iterations
+- recovered a stale Supervisor and adopted its active Worker
+- quarantined created:ui-build-plan.md with a manifest and retried build
+- refused to quarantine modified:raw/test-unit.txt and blocked immediately
+- resumed after manual evidence restoration and completed with a zero-problem verifier report
+- verified phase-specific prompts and DEADLINE_CARL environment policy in every fake Worker

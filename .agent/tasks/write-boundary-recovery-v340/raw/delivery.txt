@@ -1,0 +1,12 @@
+PASS
+
+- implementation commit: eaaf00769ad0168e989280fa3abec4bc05e33e32
+- local main: eaaf00769ad0168e989280fa3abec4bc05e33e32
+- origin/main at implementation/install check: eaaf00769ad0168e989280fa3abec4bc05e33e32
+- installed Skill: C:\Users\86187\.codex\skills\deadline-carl
+- installed version: 3.4.0
+- source package files: 51
+- installed package files: 51
+- SHA-256 mismatches: 0
+- previous installation backup: C:\Users\86187\.codex\skill-backups\deadline-carl.backup.20260905110349
+- duplicate deadline-carl backup directories under active skills root: 0

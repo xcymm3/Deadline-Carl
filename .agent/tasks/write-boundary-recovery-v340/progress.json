@@ -35,9 +35,9 @@
     },
     {
       "id": "WI-006",
-      "state": "in_progress",
-      "note": "Implementation tests pass; final evidence, commit, push, installation, and source/install hash comparison remain.",
-      "proof": ["scripts/test_deadline_policy.ps1", "scripts/test_deadline_runtime.ps1"]
+      "state": "implemented",
+      "note": "Implementation eaaf00769ad0168e989280fa3abec4bc05e33e32 is on origin/main; v3.4.0 is installed and all 51 package-file hashes match source.",
+      "proof": [".agent/tasks/write-boundary-recovery-v340/raw/delivery.txt"]
     }
   ]
 }

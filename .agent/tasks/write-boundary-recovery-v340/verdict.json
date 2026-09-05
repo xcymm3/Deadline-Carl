@@ -1,0 +1,32 @@
+{
+  "task_id": "write-boundary-recovery-v340",
+  "overall_verdict": "PASS",
+  "criteria": [
+    {"id": "AC1", "status": "PASS", "reason": "Generated build and verify prompts expose exact phase allowlists and forbid auxiliary-skill expansion."},
+    {"id": "AC2", "status": "PASS", "reason": "The E2E Worker validated formal-task, scratch, compatibility, and JSON allowlist environment variables in every phase."},
+    {"id": "AC3", "status": "PASS", "reason": "Created-only quarantine retried safely with a manifest; protected evidence modification remained an immediate hard block."},
+    {"id": "AC4", "status": "PASS", "reason": "Dedicated repair test proved stopped created-only recovery and refusal of modified, deleted, missing, and unsafe paths."},
+    {"id": "AC5", "status": "PASS", "reason": "All four PowerShell suites, package validation, Skill validation, parser checks, and diff checks passed."},
+    {"id": "AC6", "status": "PASS", "reason": "The implementation commit was pushed and installed v3.4.0 has 51 source-identical package files."}
+  ],
+  "commands_run": [
+    "pwsh -NoProfile -File scripts/test_deadline_policy.ps1",
+    "pwsh -NoProfile -File scripts/test_deadline_runtime.ps1",
+    "pwsh -NoProfile -File scripts/test_boundary_recovery.ps1",
+    "pwsh -NoProfile -File scripts/test_durable_loop.ps1",
+    "python scripts/verify_package.py",
+    "python -X utf8 C:/Users/86187/.codex/skills/.system/skill-creator/scripts/quick_validate.py D:/mydoc/deadline-carl",
+    "git diff --check",
+    "git ls-remote origin refs/heads/main"
+  ],
+  "artifacts_used": [
+    "scripts/durable_loop.ps1",
+    "assets/templates/durable-agent-prompt.md.tmpl",
+    "scripts/test_boundary_recovery.ps1",
+    "scripts/test_durable_loop.ps1",
+    "scripts/verify_package.py",
+    "SKILL.md",
+    "README.md",
+    "references/WRITE_BOUNDARIES.md"
+  ]
+}
