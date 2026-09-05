@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "task_id": "write-boundary-recovery-v340",
+  "plan_sha256": "00780940ba5385331198777afa11602db5824ab5053006df69fe40764b98f843",
+  "items": [
+    {
+      "id": "WI-001",
+      "state": "implemented",
+      "note": "Worker prompt now begins with the exact phase allowlist and classifies formal, scratch, and product outputs; matching environment variables are exported.",
+      "proof": ["assets/templates/durable-agent-prompt.md.tmpl", "scripts/durable_loop.ps1"]
+    },
+    {
+      "id": "WI-002",
+      "state": "implemented",
+      "note": "Created-only violations are safely quarantined with manifests, rechecked, counted as failures, and retried without trusting the iteration forecast.",
+      "proof": ["scripts/durable_loop.ps1", "scripts/test_durable_loop.ps1"]
+    },
+    {
+      "id": "WI-003",
+      "state": "implemented",
+      "note": "Added stopped-loop repair-boundary recovery with strict created-only, containment, reparse, presence, and blocker checks.",
+      "proof": ["scripts/durable_loop.ps1", "scripts/test_boundary_recovery.ps1"]
+    },
+    {
+      "id": "WI-004",
+      "state": "implemented",
+      "note": "Dedicated repair/refusal tests and the end-to-end interruption/quarantine/hard-block test pass; package checks cover the new contract.",
+      "proof": ["scripts/test_boundary_recovery.ps1", "scripts/test_durable_loop.ps1", "scripts/verify_package.py"]
+    },
+    {
+      "id": "WI-005",
+      "state": "implemented",
+      "note": "Version 3.4.0 documentation explains path policy, Hallmark integration, quarantine semantics, status fields, and operator repair.",
+      "proof": ["SKILL.md", "README.md", "references/WRITE_BOUNDARIES.md", "references/DURABLE_RUNTIME.md", "references/COMMANDS.md"]
+    },
+    {
+      "id": "WI-006",
+      "state": "in_progress",
+      "note": "Implementation tests pass; final evidence, commit, push, installation, and source/install hash comparison remain.",
+      "proof": ["scripts/test_deadline_policy.ps1", "scripts/test_deadline_runtime.ps1"]
+    }
+  ]
+}

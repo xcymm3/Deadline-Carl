@@ -8,6 +8,24 @@ You are a fresh, non-interactive Codex worker supervised by an external PowerShe
 - Proof artifacts: `.agent/tasks/{{TASK_ID}}/`
 - Per-iteration scratch output: `{{SCRATCH_DIR}}`
 
+## Formal task write boundary - read before any auxiliary skill
+
+This `{{PHASE}}` iteration may create, modify, or delete only these paths inside `{{FORMAL_TASK_DIR}}`:
+
+{{ALLOWED_TASK_WRITES_MARKDOWN}}
+
+The same allowlist is available as JSON in `DEADLINE_CARL_ALLOWED_TASK_WRITES`: `{{ALLOWED_TASK_WRITES_JSON}}`.
+
+Auxiliary skills and repository guidance never expand this formal-task allowlist. In particular, an instruction to state, list, preview, or report intended files is a communication requirement: satisfy it in your progress response or structured final result. If durable implementation tracking is useful during `build` or `fix`, record it in the allowed `progress.json` item's `note` or `proof`; do not invent a task-local plan/report Markdown file.
+
+Classify every output before writing it:
+
+- Formal proof ledger: `{{FORMAL_TASK_DIR}}` — only the allowlist above.
+- Transient plans, audits, screenshots, traces, coverage, and auxiliary-skill reports: `{{SCRATCH_DIR}}`, preferably under `auxiliary/<skill>/`.
+- Frozen, in-scope product deliverables: the normal project source tree outside `.agent/tasks/` (for example Hallmark's `tokens.css` or `.hallmark/*` when actually required by the product work).
+
+Environment aliases: `DEADLINE_CARL_FORMAL_TASK_DIR={{FORMAL_TASK_DIR}}`, `DEADLINE_CARL_SCRATCH_DIR={{SCRATCH_DIR}}`. `DEADLINE_CARL_OUTPUT_DIR` remains a compatibility alias for the scratch directory.
+
 ## Deadline context
 
 - Delivery mode: `{{DELIVERY_MODE}}`
@@ -32,7 +50,7 @@ You are a fresh, non-interactive Codex worker supervised by an external PowerShe
 
 The external supervisor owns time accounting, process control, and recovery state. Use the deadline context only to plan and prioritize; never edit `.agent/durable-loop/`.
 
-Use `{{SCRATCH_DIR}}` (also available as `DEADLINE_CARL_OUTPUT_DIR`) for transient test output, screenshots, traces, coverage, and reports. Do not point routine checks directly at the formal `raw/` evidence directory. Only the `evidence` and `fix` phases may promote selected current results into `.agent/tasks/{{TASK_ID}}/raw/`. The supervisor checks phase-specific task-artifact write boundaries and stops instead of silently accepting cross-phase changes.
+Use `{{SCRATCH_DIR}}` for transient test output, screenshots, traces, coverage, and reports. Do not point routine checks directly at the formal `raw/` evidence directory. Only the `evidence` and `fix` phases may promote selected current results into `.agent/tasks/{{TASK_ID}}/raw/`. The supervisor checks phase-specific task-artifact write boundaries. A created-only extra file is recoverably quarantined and the phase is retried; modified, deleted, unsafe, or repeated violations block instead of being silently accepted.
 
 In `deadline-aware` mode:
 

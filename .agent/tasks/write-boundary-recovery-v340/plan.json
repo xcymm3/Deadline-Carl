@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "task_id": "write-boundary-recovery-v340",
+  "spec_sha256": "64347d2cb61ac6adf77b9530a648dcee0bd3a0b528f97d736e2013e398b0a480",
+  "items": [
+    {
+      "id": "WI-001",
+      "title": "Add phase policy generation and Worker prompt/environment injection",
+      "ac_ids": [
+        "AC1",
+        "AC2"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-002",
+      "title": "Implement safe automatic quarantine and retry accounting",
+      "ac_ids": [
+        "AC3"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-003",
+      "title": "Implement restricted repair-boundary recovery",
+      "ac_ids": [
+        "AC4"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-004",
+      "title": "Add regression tests and package checks",
+      "ac_ids": [
+        "AC3",
+        "AC4",
+        "AC5"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-005",
+      "title": "Update Skill instructions, reference docs, README, and version",
+      "ac_ids": [
+        "AC1",
+        "AC2",
+        "AC4",
+        "AC5"
+      ],
+      "mandatory": true
+    },
+    {
+      "id": "WI-006",
+      "title": "Verify, commit, push, install, and compare the package",
+      "ac_ids": [
+        "AC6"
+      ],
+      "mandatory": true
+    }
+  ]
+}

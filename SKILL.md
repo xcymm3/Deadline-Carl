@@ -3,7 +3,7 @@ name: deadline-carl
 description: Run non-trivial repository work through a deadline-aware, recoverable Codex CLI supervisor with time-pressure planning, disk checkpoints, explicit budget extensions, and a repo-local spec/evidence/fresh-verifier proof loop. Use when the user explicitly requests an unattended or manually recoverable development loop on Windows. Do not use for one-shot edits or recurring scheduled jobs.
 license: Apache-2.0
 metadata:
-  version: "3.3.0"
+  version: "3.4.0"
 ---
 
 # Deadline-Carl
@@ -42,6 +42,7 @@ Use `proof-first` only when the user wants the previous budget-agnostic behavior
 - Never reset, clean, checkout, or discard existing worktree changes.
 - A safe stop lets the active iteration finish but prevents another iteration from starting.
 - `start -Force` only clears a recorded loop blocker. It does not overwrite proof artifacts or reset Git state.
+- `repair-boundary` is narrower than `start -Force`: it only quarantines still-present files recorded as created-only boundary violations, never modified or deleted proof artifacts.
 - Budget extension is explicit, additive, and allowed only while the supervisor is stopped.
 
 ## Commands
@@ -97,6 +98,15 @@ If a genuine blocker was recorded and has been resolved:
 ```powershell
 & scripts/durable_loop.ps1 start -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening -Force
 ```
+
+For an older blocked loop whose only violations are `created:<path>` entries, use the recoverable repair command first:
+
+```powershell
+& scripts/durable_loop.ps1 repair-boundary -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening
+& scripts/durable_loop.ps1 start -RepoRoot D:\path\to\repo -TaskId feature-auth-hardening
+```
+
+The command moves the unexpected files into ignored scratch storage, records hashes and original/destination paths in a manifest, and clears the blocker without starting work. It refuses modified, deleted, missing, unsafe, mixed, or actively running cases.
 
 ### Extend a stopped loop
 
@@ -181,6 +191,9 @@ Transient Worker output is isolated from formal evidence:
 ```text
 .agent/deadline-carl-scratch/<TASK_ID>/
   iteration-<NNN>-<PHASE>/
+    auxiliary/<skill>/
+    boundary-automatic-*/
+  repairs/boundary-repair-boundary-*/
 ```
 
 The supervisor and scratch directories are local state: `init` ignores `/.agent/durable-loop/`, `/.agent/deadline-carl-scratch/`, and the temporary task initialization sentinel. Keep the proof bundle under `.agent/tasks/` available for review; do not ignore the entire `.agent/` tree.
@@ -197,6 +210,7 @@ It additionally exposes:
 - `iterationBudgetDisplay`, such as `15/120`, explicitly labeled as capacity rather than progress
 - `gitHygiene`, including ignore readiness, tracked local-state files, broad rules that hide proof artifacts, and scoped managed-path status
 - `lastWriteBoundaryStatus` and `lastWriteBoundaryViolations`, showing whether the previous Worker changed task artifacts owned by another phase
+- `lastWriteBoundaryRecovery` and `writeBoundaryRecoveryHistory`, including quarantine manifests for automatic or operator-requested recovery
 - `planning`, `forecast`, `activeWorkerStrategy`, `strategyHistory`, `iterationHistory`, `budgetEvents` and `budgetAssessment`; distinguish next-dispatch guidance from the strategy the current Worker actually received
 
 ## Proof phases
@@ -209,7 +223,9 @@ The supervisor runs one fresh Codex process per phase:
 4. `verify`: use a fresh process to rerun checks into scratch and replace both `verdict.json` and `problems.md` without changing production code, evidence, or `raw/`. A PASS writes a zero-problem report; FAIL or UNKNOWN writes detailed findings. Never preserve a stale problems report from an earlier pass.
 5. `fix`: reconfirm verifier findings, apply the smallest safe changes, update work-item progress, and refresh evidence. Partial repair returns `progressed`; a fresh verifier runs only after the build and evidence gates are both ready.
 
-Before every Worker starts, the supervisor records hashes for the formal task bundle. After it exits, the supervisor enforces the phase write set: `freeze` may change `spec.md`; `build` may change `progress.json`; `evidence` may change evidence files and `raw/`; `verify` may change only verdict and problems; `fix` may change progress and evidence. `deadline-report.md` is allowed in every phase. A cross-phase change blocks the loop with exact file diagnostics and is never reverted automatically.
+Before every Worker starts, the supervisor records hashes for the formal task bundle. Every prompt prominently lists the current phase write set, and the Worker receives `DEADLINE_CARL_FORMAL_TASK_DIR`, `DEADLINE_CARL_SCRATCH_DIR`, and JSON `DEADLINE_CARL_ALLOWED_TASK_WRITES`. Auxiliary skills cannot expand that set. Their transient plans and reports belong in scratch; actual in-scope product deliverables stay in the normal project tree.
+
+After a Worker exits, `freeze` may change `spec.md`; `build` may change `progress.json`; `evidence` may change evidence files and `raw/`; `verify` may change only verdict and problems; `fix` may change progress and evidence. `deadline-report.md` is allowed in every phase. If all violations are newly created extra files, they are moved into a per-iteration quarantine with a manifest and the same phase is retried; the iteration still counts as a failure. Repeated violations eventually block. Modified, deleted, unsafe, or mixed violations block immediately and are never automatically reverted. Read `references/WRITE_BOUNDARIES.md` when diagnosing or repairing a boundary event.
 
 Overall completion requires all frozen work items implemented, a `PASS` verdict, and successful structural validation from `scripts/task_loop.py validate`. The PowerShell supervisor delegates artifact validation to that Python validator so schema rules have one executable source of truth.
 
@@ -244,6 +260,7 @@ Before distributing a changed copy of this skill, run:
 python scripts/verify_package.py
 pwsh -NoProfile -File scripts/test_deadline_policy.ps1
 pwsh -NoProfile -File scripts/test_deadline_runtime.ps1
+pwsh -NoProfile -File scripts/test_boundary_recovery.ps1
 pwsh -NoProfile -File scripts/test_durable_loop.ps1
 ```
 

@@ -6,6 +6,8 @@ Replace `<TASK_ID>` and any placeholder text.
 
 When Deadline-Carl runs these phases through the supervisor, the prompt also includes the delivery mode, deadline stage, total and remaining active time, remaining percentage, iteration timeout, and remaining iteration starts. Use this information for prioritization only. Never relax mandatory acceptance criteria or edit supervisor-owned runtime files.
 
+The supervisor also places the current phase's exact formal-task allowlist before any auxiliary-skill instructions. `DEADLINE_CARL_FORMAL_TASK_DIR`, `DEADLINE_CARL_SCRATCH_DIR`, and JSON `DEADLINE_CARL_ALLOWED_TASK_WRITES` carry the same policy. A request to state or preview intended files belongs in the Worker response, not a new `.agent/tasks/<TASK_ID>/*.md` file. Use scratch for transient auxiliary documents and the ordinary project tree for actual frozen deliverables. Read [Write boundaries](WRITE_BOUNDARIES.md) when a phase is blocked or a quarantine is reported.
+
 Codex orchestration mapping:
 
 - `spawn_agent`: spawn one child with `agent_type` set to the role name from `.codex/agents/`

@@ -7,7 +7,7 @@
 <p align="center"><strong>让 Codex 长任务有时间感、有证据、能恢复。</strong></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-3.3.0-EF6C00" alt="Version 3.3.0">
+  <img src="https://img.shields.io/badge/version-3.4.0-EF6C00" alt="Version 3.4.0">
   <img src="https://img.shields.io/badge/platform-Windows-0078D4" alt="Platform Windows">
   <img src="https://img.shields.io/badge/PowerShell-7%20recommended-5391FE" alt="PowerShell 7 recommended">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-2E7D32" alt="Apache-2.0 license"></a>
@@ -29,6 +29,8 @@ Deadline-Carl 把这些隐含状态写进仓库，并用脚本执行硬约束：
 - 时间变少时调整优先级，但不降低 PASS 标准
 - 实现、独立验证和验收进度分开计算
 - 临时测试输出与正式验收证据隔离，Verifier 不能覆盖已经归档的 `raw/`
+- 每轮把当前阶段的精确写入白名单和机器可读路径策略交给 Worker，辅助 Skill 不能扩大正式工件范围
+- 误建的新文件会保留到可恢复隔离区后重试；修改或删除受保护工件仍立即阻塞
 - 自动忽略 PID、心跳和日志等本机状态，同时检查宽泛 ignore 和已跟踪运行文件
 - 预算耗尽或工作无法完成时，如实交付缺口，不把部分完成包装成成功
 
@@ -97,7 +99,7 @@ Deadline-Carl 有两层：
 
 每轮 Worker 返回剩余工作区间、置信度、依据和预计迭代数。监督器结合实际耗时、估时偏差和检查成本修正判断；升级需连续两次新估算支持，降级无需等待。没有可靠估算时采取保守策略，不能仅因为时间多就精修。
 
-精修不是擅自扩大需求。例如明确要求“简单几何体敌人”，可以提升受击反馈和辨识度，但不能自行改成复杂美术风格。允许的提升方向在需求冻结时记录；v3.3 每个任务最多一次限时精修，避免无限优化。有余量且没有值得做的提升时，提前完成。
+精修不是擅自扩大需求。例如明确要求“简单几何体敌人”，可以提升受击反馈和辨识度，但不能自行改成复杂美术风格。允许的提升方向在需求冻结时记录；当前版本每个任务最多一次限时精修，避免无限优化。有余量且没有值得做的提升时，提前完成。
 
 可在初始化时增加 `-DeadlineUtc '2026-09-05T18:00:00+08:00'`。实际可用时间取“剩余活跃预算”和“距绝对截止时间”中较小者。暂停不扣活跃时间，但绝对截止时间继续流逝；`extend` 不会自动延后截止时间。
 
@@ -328,6 +330,14 @@ $skill = Join-Path $codexHome 'skills\deadline-carl'
 
 该路径同时通过 `DEADLINE_CARL_OUTPUT_DIR` 环境变量提供。日常测试、截图、trace、coverage 和报告应先写入这里；只有 `evidence` 和 `fix` 阶段可以把选定结果复制进正式 `raw/`。
 
+每轮还提供三个更明确的环境变量：
+
+- `DEADLINE_CARL_FORMAL_TASK_DIR`：严格管理的 `.agent/tasks/<TASK_ID>/`
+- `DEADLINE_CARL_SCRATCH_DIR`：本轮临时输出目录
+- `DEADLINE_CARL_ALLOWED_TASK_WRITES`：当前阶段可写正式工件的 JSON 数组
+
+辅助 Skill 要求“列出预计改动文件”时，应在 Worker 消息中说明；需要临时落盘时写入 `auxiliary/<skill>/`。像 Hallmark 的 `tokens.css`、`.hallmark/preflight.json` 这类真正属于当前产品范围的文件仍写入正常项目树，而不是正式任务账本或 scratch。
+
 `init` 会在项目根 `.gitignore` 中幂等维护以下精确规则，保留项目已有内容：
 
 ```gitignore
@@ -342,7 +352,17 @@ $skill = Join-Path $codexHome 'skills\deadline-carl'
 
 Worker 不允许编辑监督器目录。`runtime.json` 由监督器原子更新，记录当前阶段、剩余时间、心跳、进程身份、失败次数和完成状态。
 
-Supervisor 会比较每轮前后的任务工件哈希并执行阶段写入边界。如果 `verify` 覆盖 `raw/`，或其他阶段改写不归自己所有的正式工件，Loop 会进入 blocked 状态，在 `lastWriteBoundaryViolations` 中列出文件，不会自动清理或接受该轮结果。`gitHygiene` 同时报告 ignore 是否生效、正式工件是否被宽泛规则隐藏，以及本地状态是否已经被 Git 跟踪。
+Supervisor 会比较每轮前后的任务工件哈希并执行阶段写入边界。若违规全部是新建文件（例如 build 阶段误建 `ui-build-plan.md`），它会把文件移动到本轮 scratch 的隔离目录，写入包含原路径、目标路径、SHA-256、原因和时间的 `manifest.json`，将该轮计为失败并重试同一阶段。连续发生仍会达到失败上限而阻塞。若 `verify` 覆盖 `raw/`，或出现修改、删除、路径不安全、混合违规，则立即 blocked，不自动回退源码或正式证据。
+
+旧版本留下的 created-only 阻塞可在停止状态下修复：
+
+```powershell
+& "$skill\scripts\durable_loop.ps1" repair-boundary `
+  -RepoRoot D:\work\my-app `
+  -TaskId feature-login-rate-limit
+```
+
+命令只隔离仍存在的 `created:` 文件并清除 blocker，不会启动 Loop。随后用普通 `start` 恢复。它拒绝 `modified:`、`deleted:`、文件缺失、越界路径和正在运行的任务；这些情况必须人工检查。详细规则见 [写入边界与恢复](references/WRITE_BOUNDARIES.md)。`gitHygiene` 同时报告 ignore 是否生效、正式工件是否被宽泛规则隐藏，以及本地状态是否已经被 Git 跟踪。
 
 ## 安全边界
 
@@ -350,7 +370,7 @@ Supervisor 会比较每轮前后的任务工件哈希并执行阶段写入边界
 - 不在未经明确授权时启动后台循环
 - 不使用无限制的自动批准模式
 - 不在恢复时重置、清理或覆盖 Git 工作区
-- 越阶段写入时停止并报告，不自动回退用户文件
+- created-only 越界文件可恢复隔离并重试；修改、删除或不安全越界立即停止
 - 超时后终止对应 Worker 进程树，避免留下失控子进程
 - 只有全部验收项由新验证者确认后才能标记完成
 - 预算不足时保留可用核心并记录缺口，不伪造 PASS
@@ -381,12 +401,17 @@ Supervisor 会比较每轮前后的任务工件哈希并执行阶段写入边界
 
 增加时间不会增加迭代次数。先检查连续失败原因和日志，再决定是否以新的、边界更清晰的任务重新初始化。
 
+### `ui-build-plan.md` 等辅助文档触发写入边界
+
+v3.4 起，新运行会自动把这类 created-only 文件隔离到 scratch 并重试，不需要丢弃源码改动。若这是旧运行留下的 blocked 状态，先执行 `repair-boundary`，检查返回的 manifest，再普通 `start`。如果诊断含 `modified:` 或 `deleted:`，不要强行修复；先人工恢复或确认正式工件。
+
 ## 开发与验证
 
 修改 Skill 后运行：
 
 ```powershell
 python .\scripts\verify_package.py
+pwsh -NoProfile -File .\scripts\test_boundary_recovery.ps1
 pwsh -NoProfile -File .\scripts\test_durable_loop.ps1
 ```
 
@@ -407,6 +432,7 @@ SKILL.md      Codex 加载的 Skill 入口
 - [SKILL.md](SKILL.md)：完整运行规则
 - [COMMANDS.md](references/COMMANDS.md)：各阶段职责和提示词
 - [DURABLE_RUNTIME.md](references/DURABLE_RUNTIME.md)：监督器状态与恢复语义
+- [WRITE_BOUNDARIES.md](references/WRITE_BOUNDARIES.md)：阶段写入白名单、隔离与修复规则
 - [SCHEMAS.md](references/SCHEMAS.md)：计划、进度、证据和判定结构
 - [VERIFICATION.md](VERIFICATION.md)：包验证范围
 

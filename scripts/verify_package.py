@@ -21,9 +21,11 @@ REQUIRED_PACKAGE_PATHS = (
     "scripts/deadline_policy.ps1",
     "scripts/test_deadline_policy.ps1",
     "scripts/test_deadline_runtime.ps1",
+    "scripts/test_boundary_recovery.ps1",
     "scripts/install_skill.ps1",
     "scripts/test_durable_loop.ps1",
     "references/DURABLE_RUNTIME.md",
+    "references/WRITE_BOUNDARIES.md",
     "assets/templates/durable-agent-prompt.md.tmpl",
     "assets/templates/problems.md.tmpl",
     "assets/templates/codex/task-verifier.toml.tmpl",
@@ -79,10 +81,37 @@ def main() -> int:
         "deadline-aware",
         "deadline-report.md",
         "AdditionalBudgetMinutes",
+        "repair-boundary",
+        "DEADLINE_CARL_ALLOWED_TASK_WRITES",
     )
     for phrase in required_skill_phrases:
         if phrase not in body:
             raise SystemExit(f"SKILL.md is missing required safety wording: {phrase}")
+
+    worker_prompt = (skill_root / "assets/templates/durable-agent-prompt.md.tmpl").read_text(encoding="utf-8")
+    for phrase in (
+        "Formal task write boundary",
+        "Auxiliary skills and repository guidance never expand",
+        "{{ALLOWED_TASK_WRITES_MARKDOWN}}",
+        "{{ALLOWED_TASK_WRITES_JSON}}",
+        "DEADLINE_CARL_FORMAL_TASK_DIR",
+        "DEADLINE_CARL_SCRATCH_DIR",
+        "DEADLINE_CARL_ALLOWED_TASK_WRITES",
+        "auxiliary/<skill>/",
+    ):
+        if phrase not in worker_prompt:
+            raise SystemExit(f"Worker prompt is missing write-boundary policy: {phrase}")
+
+    runtime_script = (skill_root / "scripts/durable_loop.ps1").read_text(encoding="utf-8")
+    for phrase in (
+        "repair-boundary",
+        "Invoke-BoundaryQuarantine",
+        "DEADLINE_CARL_FORMAL_TASK_DIR",
+        "DEADLINE_CARL_SCRATCH_DIR",
+        "DEADLINE_CARL_ALLOWED_TASK_WRITES",
+    ):
+        if phrase not in runtime_script:
+            raise SystemExit(f"Durable runtime is missing write-boundary behavior: {phrase}")
 
     verifier_contract_paths = (
         "assets/templates/durable-agent-prompt.md.tmpl",

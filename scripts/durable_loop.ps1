@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
   [Parameter(Position = 0)]
-  [ValidateSet('init', 'start', 'supervise', 'status', 'history', 'stop', 'checkpoint', 'extend', 'doctor')]
+  [ValidateSet('init', 'start', 'supervise', 'status', 'history', 'stop', 'checkpoint', 'extend', 'repair-boundary', 'doctor')]
   [string]$Command = 'status',
   [string]$RepoRoot = (Get-Location).Path,
   [string]$TaskId = '',
@@ -180,6 +180,8 @@ function Ensure-StateFields([object]$State, [object]$Config) {
     activeArtifactSnapshot = $null
     lastWriteBoundaryStatus = 'not-run'
     lastWriteBoundaryViolations = @()
+    lastWriteBoundaryRecovery = $null
+    writeBoundaryRecoveryHistory = @()
     lastHeartbeatUtc = $null
     lastTickUtc = $null
     lastCheckpointUtc = $null
@@ -240,6 +242,168 @@ function Test-PhaseArtifactWriteAllowed([string]$Phase, [string]$RelativePath) {
     'verify' { return $path -in @('verdict.json', 'problems.md') }
     'fix' { return $path -in @('progress.json', 'evidence.md', 'evidence.json') -or $path.StartsWith('raw/') }
     default { return $false }
+  }
+}
+
+function Get-PhaseAllowedTaskWrites([string]$Phase) {
+  $allowed = [System.Collections.Generic.List[string]]::new()
+  $allowed.Add('deadline-report.md')
+  switch ($Phase) {
+    'freeze' { $allowed.Add('spec.md') }
+    'build' { $allowed.Add('progress.json') }
+    'evidence' {
+      $allowed.Add('evidence.md'); $allowed.Add('evidence.json'); $allowed.Add('raw/**')
+    }
+    'verify' { $allowed.Add('verdict.json'); $allowed.Add('problems.md') }
+    'fix' {
+      $allowed.Add('progress.json'); $allowed.Add('evidence.md'); $allowed.Add('evidence.json'); $allowed.Add('raw/**')
+    }
+    default { throw "Unknown phase: $Phase" }
+  }
+  return @($allowed)
+}
+
+function Test-SafeRelativeTaskPath([string]$RelativePath) {
+  if (-not $RelativePath -or [IO.Path]::IsPathRooted($RelativePath) -or $RelativePath.Contains(':')) { return $false }
+  $normalized = $RelativePath.Replace('\', '/')
+  if ($normalized.StartsWith('/') -or $normalized.EndsWith('/')) { return $false }
+  foreach ($segment in $normalized.Split('/')) {
+    if (-not $segment -or $segment -in @('.', '..')) { return $false }
+  }
+  return $true
+}
+
+function Resolve-ContainedPath([string]$BasePath, [string]$RelativePath) {
+  if (-not (Test-SafeRelativeTaskPath $RelativePath)) { return $null }
+  $baseFull = [IO.Path]::GetFullPath($BasePath).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $candidate = [IO.Path]::GetFullPath((Join-Path $baseFull $RelativePath.Replace('/', [IO.Path]::DirectorySeparatorChar)))
+  $prefix = $baseFull + [IO.Path]::DirectorySeparatorChar
+  if (-not $candidate.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $null }
+  return $candidate
+}
+
+function Test-PathChainHasReparsePoint([string]$Path, [string]$Boundary) {
+  $current = [IO.Path]::GetFullPath($Path)
+  $boundaryFull = [IO.Path]::GetFullPath($Boundary).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  while ($current.StartsWith($boundaryFull, [System.StringComparison]::OrdinalIgnoreCase)) {
+    if (Test-Path -LiteralPath $current) {
+      $item = Get-Item -LiteralPath $current -Force
+      if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { return $true }
+    }
+    if ($current.Equals($boundaryFull, [System.StringComparison]::OrdinalIgnoreCase)) { break }
+    $parent = Split-Path -Parent $current
+    if (-not $parent -or $parent -eq $current) { break }
+    $current = $parent
+  }
+  return $false
+}
+
+function Get-CreatedBoundaryPaths([object[]]$Violations, [string]$Phase) {
+  $paths = [System.Collections.Generic.List[string]]::new()
+  if (@($Violations).Count -eq 0) { return @() }
+  foreach ($violation in @($Violations)) {
+    $text = [string]$violation
+    if (-not $text.StartsWith('created:', [System.StringComparison]::Ordinal)) { return @() }
+    $relativePath = $text.Substring('created:'.Length)
+    if (-not (Test-SafeRelativeTaskPath $relativePath) -or (Test-PhaseArtifactWriteAllowed $Phase $relativePath)) { return @() }
+    $paths.Add($relativePath.Replace('\', '/'))
+  }
+  return @($paths | Sort-Object -Unique)
+}
+
+function Invoke-BoundaryQuarantine(
+  [object]$Config,
+  [object]$Paths,
+  [object]$State,
+  [object[]]$Violations,
+  [ValidateSet('automatic', 'repair-boundary')][string]$Mode
+) {
+  $relativePaths = @(Get-CreatedBoundaryPaths $Violations ([string]$State.phase))
+  if ($relativePaths.Count -eq 0) {
+    return [pscustomobject]@{ succeeded = $false; reason = 'Violations are not exclusively safe, disallowed created files.' }
+  }
+
+  if ((Test-PathChainHasReparsePoint $Paths.TaskDirectory $Config.repoRoot) -or
+      (Test-PathChainHasReparsePoint $Paths.ScratchDirectory $Config.repoRoot)) {
+    return [pscustomobject]@{ succeeded = $false; reason = 'Formal task or scratch ancestry contains a reparse point.' }
+  }
+
+  $scratchRoot = [IO.Path]::GetFullPath([string]$Paths.ScratchDirectory).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $parent = if ($Mode -eq 'automatic') { [string]$State.currentScratchDirectory } else { Join-Path $scratchRoot 'repairs' }
+  if (-not $parent) {
+    return [pscustomobject]@{ succeeded = $false; reason = 'No scratch directory is available for recovery.' }
+  }
+  $parentFull = [IO.Path]::GetFullPath($parent).TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+  $scratchPrefix = $scratchRoot + [IO.Path]::DirectorySeparatorChar
+  if (-not ($parentFull.Equals($scratchRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+      $parentFull.StartsWith($scratchPrefix, [System.StringComparison]::OrdinalIgnoreCase))) {
+    return [pscustomobject]@{ succeeded = $false; reason = 'Recovery destination escapes the configured scratch directory.' }
+  }
+
+  Ensure-Directory $parentFull
+  if (Test-PathChainHasReparsePoint $parentFull $scratchRoot) {
+    return [pscustomobject]@{ succeeded = $false; reason = 'Recovery destination contains a reparse point.' }
+  }
+  $stamp = [DateTimeOffset]::UtcNow.ToString('yyyyMMddTHHmmssfffZ')
+  $recoveryDirectory = Join-Path $parentFull ("boundary-$Mode-$stamp-$([Guid]::NewGuid().ToString('N').Substring(0, 8))")
+  Ensure-Directory $recoveryDirectory
+
+  $moves = [System.Collections.Generic.List[object]]::new()
+  foreach ($relativePath in $relativePaths) {
+    $sourcePath = Resolve-ContainedPath $Paths.TaskDirectory $relativePath
+    if (-not $sourcePath -or -not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+      return [pscustomobject]@{ succeeded = $false; reason = "Created file is missing or unsafe: $relativePath" }
+    }
+    if (Test-PathChainHasReparsePoint $sourcePath $Paths.TaskDirectory) {
+      return [pscustomobject]@{ succeeded = $false; reason = "Created file crosses a reparse point: $relativePath" }
+    }
+    $destinationPath = Resolve-ContainedPath $recoveryDirectory $relativePath
+    if (-not $destinationPath -or (Test-Path -LiteralPath $destinationPath)) {
+      return [pscustomobject]@{ succeeded = $false; reason = "Recovery destination is unsafe or already exists: $relativePath" }
+    }
+    $file = Get-Item -LiteralPath $sourcePath -Force
+    $moves.Add([pscustomobject]@{
+      relativePath = $relativePath
+      sourcePath = $sourcePath
+      destinationPath = $destinationPath
+      sha256 = (Get-FileHash -LiteralPath $sourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+      sizeBytes = [long]$file.Length
+    })
+  }
+
+  $moved = [System.Collections.Generic.List[object]]::new()
+  try {
+    foreach ($move in $moves) {
+      Ensure-Directory (Split-Path -Parent $move.destinationPath)
+      Move-Item -LiteralPath $move.sourcePath -Destination $move.destinationPath
+      $moved.Add($move)
+    }
+    $manifestPath = Join-Path $recoveryDirectory 'manifest.json'
+    $manifest = [pscustomobject]@{
+      schemaVersion = 1
+      mode = $Mode
+      taskId = [string]$Config.taskId
+      phase = [string]$State.phase
+      iteration = $State.activeIteration
+      quarantinedAtUtc = Get-UtcNowIso
+      reason = 'Created file exceeded the phase-specific formal task write allowlist.'
+      items = @($moves)
+    }
+    Write-JsonAtomic $manifestPath $manifest
+    return [pscustomobject]@{
+      succeeded = $true; mode = $Mode; manifestPath = $manifestPath
+      recoveryDirectory = $recoveryDirectory; items = @($moves); atUtc = $manifest.quarantinedAtUtc
+    }
+  } catch {
+    $rollbackMoves = @($moved)
+    [array]::Reverse($rollbackMoves)
+    foreach ($move in $rollbackMoves) {
+      if ((Test-Path -LiteralPath $move.destinationPath -PathType Leaf) -and -not (Test-Path -LiteralPath $move.sourcePath)) {
+        Ensure-Directory (Split-Path -Parent $move.sourcePath)
+        Move-Item -LiteralPath $move.destinationPath -Destination $move.sourcePath -ErrorAction SilentlyContinue
+      }
+    }
+    return [pscustomobject]@{ succeeded = $false; reason = "Recovery failed and moved files were rolled back: $($_.Exception.Message)" }
   }
 }
 
@@ -515,6 +679,9 @@ function Get-NextPhase([string]$Phase, [object]$Paths) {
 function New-IterationPrompt([object]$Config, [object]$State) {
   $template = Get-Content -LiteralPath $PromptTemplate -Raw -Encoding utf8
   $context = Get-DeadlineContext $Config $State
+  $allowedTaskWrites = @(Get-PhaseAllowedTaskWrites ([string]$State.phase))
+  $allowedTaskWritesJson = ConvertTo-Json $allowedTaskWrites -Compress
+  $allowedTaskWritesMarkdown = ($allowedTaskWrites | ForEach-Object { "- ``$_``" }) -join "`r`n"
   $proofStatus = Get-ProofStatus $Config.repoRoot $Config.taskId
   $implementationProgress = if ($proofStatus -and $proofStatus.progress_display) { [string]$proofStatus.progress_display.implementation } else { '[unavailable]' }
   $verificationProgress = if ($proofStatus -and $proofStatus.progress_display) { [string]$proofStatus.progress_display.verification } else { '[unavailable]' }
@@ -536,6 +703,9 @@ function New-IterationPrompt([object]$Config, [object]$State) {
     Replace('{{DEADLINE_UTC}}', [string]$context.deadlineUtc).
     Replace('{{TASK_HELPER}}', [string]$TaskHelper).
     Replace('{{SCRATCH_DIR}}', [string]$State.currentScratchDirectory).
+    Replace('{{FORMAL_TASK_DIR}}', (Join-Path ([string]$Config.repoRoot) ".agent\tasks\$($Config.taskId)")).
+    Replace('{{ALLOWED_TASK_WRITES_JSON}}', $allowedTaskWritesJson).
+    Replace('{{ALLOWED_TASK_WRITES_MARKDOWN}}', $allowedTaskWritesMarkdown).
     Replace('{{IMPLEMENTATION_PROGRESS}}', $implementationProgress).
     Replace('{{VERIFICATION_PROGRESS}}', $verificationProgress).
     Replace('{{ACCEPTANCE_PROGRESS}}', $acceptanceProgress)
@@ -625,6 +795,9 @@ function Start-CodexIteration(
     DEADLINE_CARL_PHASE = [string]$State.phase
     DEADLINE_CARL_ITERATION = [string]$iteration
     DEADLINE_CARL_OUTPUT_DIR = [string]$scratchPath
+    DEADLINE_CARL_FORMAL_TASK_DIR = [string]$Paths.TaskDirectory
+    DEADLINE_CARL_SCRATCH_DIR = [string]$scratchPath
+    DEADLINE_CARL_ALLOWED_TASK_WRITES = ConvertTo-Json @(Get-PhaseAllowedTaskWrites ([string]$State.phase)) -Compress
   }
   $previousEnvironment = @{}
   $State = Update-Elapsed $State $Config
@@ -711,8 +884,26 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
   $validExit = $null -eq $ExitCode -or [int]$ExitCode -eq 0
   $validResult = $null -ne $result -and $result.phase -eq $phase
   $writeBoundary = Test-PhaseWriteBoundary $phase $state.activeArtifactSnapshot $Paths.TaskDirectory
-  $state.lastWriteBoundaryStatus = if (-not $writeBoundary.checked) { 'not-checked' } elseif ($writeBoundary.passed) { 'pass' } else { 'fail' }
-  $state.lastWriteBoundaryViolations = @($writeBoundary.violations)
+  $originalBoundaryViolations = @($writeBoundary.violations)
+  $boundaryRecovery = $null
+  $boundaryRestored = $false
+  if (-not $writeBoundary.passed -and @(Get-CreatedBoundaryPaths $writeBoundary.violations $phase).Count -gt 0) {
+    $boundaryRecovery = Invoke-BoundaryQuarantine $Config $Paths $state $writeBoundary.violations 'automatic'
+    if ($boundaryRecovery.succeeded) {
+      $recheck = Test-PhaseWriteBoundary $phase $state.activeArtifactSnapshot $Paths.TaskDirectory
+      $boundaryRestored = $recheck.passed
+      if (-not $boundaryRestored) {
+        $boundaryRecovery | Add-Member -NotePropertyName recheckViolations -NotePropertyValue @($recheck.violations)
+      }
+    }
+  }
+  $state.lastWriteBoundaryStatus = if (-not $writeBoundary.checked) { 'not-checked' } elseif ($writeBoundary.passed) { 'pass' } elseif ($boundaryRestored) { 'quarantined' } else { 'fail' }
+  $state.lastWriteBoundaryViolations = $originalBoundaryViolations
+  $state.lastWriteBoundaryRecovery = $boundaryRecovery
+  if ($boundaryRecovery -and $boundaryRecovery.succeeded) {
+    $state.writeBoundaryRecoveryHistory = @($state.writeBoundaryRecoveryHistory) + @($boundaryRecovery)
+    Add-SupervisorLog $Paths "Created-only task files quarantined. phase=$phase manifest=$($boundaryRecovery.manifestPath) restored=$boundaryRestored"
+  }
   if ($writeBoundary.passed -and $validExit -and $validResult -and $result.status -eq 'completed' -and $phase -eq 'freeze' -and (Test-FrozenSpec $Paths)) {
     Invoke-ProofPlanSync $Config.repoRoot $Config.taskId $true $true | Out-Null
   }
@@ -730,6 +921,8 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
     summary = if ($validResult) { $result.summary } else { 'No valid result returned.' }
     forecastBefore = $state.iterationForecast; forecastAfter = $state.forecast
     forecastStatus = $state.forecastStatus; writeBoundaryPassed = $writeBoundary.passed
+    writeBoundaryStatus = $state.lastWriteBoundaryStatus; writeBoundaryViolations = $originalBoundaryViolations
+    writeBoundaryRecovery = $boundaryRecovery
   })
   Close-StrategyInterval $state (Get-UtcNowIso) 'iteration-ended'
   Open-StrategyInterval $state 'waiting' ([pscustomobject]@{ reason = 'Supervisor transition, retry delay or process recovery; not worker execution.' })
@@ -746,7 +939,11 @@ function Complete-Iteration([object]$Config, [object]$Paths, [object]$ExitCode) 
     $state.lastIterationSummary = [string]$result.summary
   }
 
-  if (-not $writeBoundary.passed) {
+  if ($boundaryRestored) {
+    $state.consecutiveFailures = [int]$state.consecutiveFailures + 1
+    $state.lastIterationSummary = "Phase $phase created files outside its allowlist. They were quarantined for recovery; retrying the same phase: $($originalBoundaryViolations -join ', ')"
+    $state.blockedReason = $null
+  } elseif (-not $writeBoundary.passed) {
     $state.consecutiveFailures = [int]$state.consecutiveFailures + 1
     $state.blocked = $true
     $state.lastIterationSummary = "Phase $phase crossed its task-artifact write boundary: $(@($writeBoundary.violations) -join ', ')"
@@ -894,6 +1091,8 @@ function Write-Status([object]$Config, [object]$Paths, [object]$State) {
     currentScratchDirectory = $State.currentScratchDirectory
     lastWriteBoundaryStatus = $State.lastWriteBoundaryStatus
     lastWriteBoundaryViolations = @($State.lastWriteBoundaryViolations)
+    lastWriteBoundaryRecovery = $State.lastWriteBoundaryRecovery
+    writeBoundaryRecoveryHistory = @($State.writeBoundaryRecoveryHistory | Select-Object -Last 10)
     supervisorLog = $Paths.SupervisorLog
   } | ConvertTo-Json -Depth 20
 }
@@ -999,7 +1198,41 @@ switch ($Command) {
       taskId = $config.taskId; historyStartedAtUtc = $state.historyStartedAtUtc
       strategyHistory = @($state.strategyHistory); iterationHistory = @($state.iterationHistory)
       budgetEvents = @($state.budgetEvents); budgetAssessment = Get-BudgetAssessment $state $config
+      writeBoundaryRecoveryHistory = @($state.writeBoundaryRecoveryHistory)
     } | ConvertTo-Json -Depth 20
+  }
+  'repair-boundary' {
+    if ($state.running -or $state.currentIterationActive -or (Test-ProcessIdentity $state.activeChildPid $state.activeChildStartedAtUtc)) {
+      throw 'Stop the loop and its active Worker before repairing a write-boundary violation.'
+    }
+    if (-not $state.blocked) { throw 'repair-boundary requires a blocked loop.' }
+    if ($state.lastWriteBoundaryStatus -ne 'fail' -or @($state.lastWriteBoundaryViolations).Count -eq 0) {
+      throw 'The blocked loop has no failed write-boundary record to repair.'
+    }
+    if (@(Get-CreatedBoundaryPaths $state.lastWriteBoundaryViolations ([string]$state.phase)).Count -eq 0) {
+      throw 'repair-boundary only accepts violations composed entirely of safe created files; modified and deleted artifacts require manual review.'
+    }
+    $failuresBeforeRepair = [int]$state.consecutiveFailures
+    $repair = Invoke-BoundaryQuarantine $config $paths $state $state.lastWriteBoundaryViolations 'repair-boundary'
+    if (-not $repair.succeeded) { throw "Write-boundary repair refused: $($repair.reason)" }
+    foreach ($item in @($repair.items)) {
+      if (Test-Path -LiteralPath $item.sourcePath) {
+        throw "Write-boundary repair did not remove the formal task file: $($item.relativePath)"
+      }
+    }
+    $repair | Add-Member -NotePropertyName failuresBeforeRepair -NotePropertyValue $failuresBeforeRepair
+    $state.lastWriteBoundaryStatus = 'repaired'
+    $state.lastWriteBoundaryRecovery = $repair
+    $state.writeBoundaryRecoveryHistory = @($state.writeBoundaryRecoveryHistory) + @($repair)
+    $state.blocked = $false
+    $state.blockedReason = $null
+    $state.stopReason = 'boundary-repaired'
+    $state.consecutiveFailures = 0
+    $state.lastIterationSummary = "Created-only write-boundary violation repaired. Review quarantine manifest: $($repair.manifestPath)"
+    $state.lastCheckpointUtc = Get-UtcNowIso
+    Write-JsonAtomic $paths.Runtime $state
+    Add-SupervisorLog $paths "Created-only write boundary repaired. manifest=$($repair.manifestPath)"
+    Write-Status $config $paths $state
   }
   'status' {
     Write-Status $config $paths $state

@@ -11,6 +11,7 @@ $repo = Join-Path $testRoot 'repo'
 $taskId = 'recovery-test'
 $statePath = Join-Path $repo ".agent\durable-loop\$taskId\runtime.json"
 $delayMarker = Join-Path $repo ".agent\durable-loop\$taskId\delay-build-once"
+$createdBoundaryMarker = Join-Path $repo ".agent\durable-loop\$taskId\create-extra-build-file-once"
 $writeBoundaryMarker = Join-Path $repo ".agent\durable-loop\$taskId\violate-verify-once"
 $protectedRawPath = Join-Path $repo ".agent\tasks\$taskId\raw\test-unit.txt"
 $fakeCodex = Join-Path $testRoot 'fake-codex.ps1'
@@ -18,7 +19,11 @@ $startedSupervisors = [System.Collections.Generic.List[int]]::new()
 
 function Read-TestState {
   if (-not (Test-Path -LiteralPath $statePath)) { return $null }
-  return Get-Content -LiteralPath $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+  try {
+    return Get-Content -LiteralPath $statePath -Raw -Encoding utf8 | ConvertFrom-Json
+  } catch {
+    return $null
+  }
 }
 
 function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds, [string]$FailureMessage) {
@@ -74,11 +79,22 @@ $resultStatus = 'completed'
 $taskDirectory = Join-Path $root ".agent\tasks\$task"
 $runtimeDirectory = Join-Path $root ".agent\durable-loop\$task"
 $marker = Join-Path $runtimeDirectory 'delay-build-once'
+$createdBoundaryMarker = Join-Path $runtimeDirectory 'create-extra-build-file-once'
 $writeBoundaryMarker = Join-Path $runtimeDirectory 'violate-verify-once'
 $scratchDirectory = $env:DEADLINE_CARL_OUTPUT_DIR
 
 if (-not $scratchDirectory -or -not (Test-Path -LiteralPath $scratchDirectory)) { exit 3 }
 if ($env:DEADLINE_CARL_TASK_ID -ne $task -or $env:DEADLINE_CARL_PHASE -ne $phase) { exit 4 }
+if ($env:DEADLINE_CARL_FORMAL_TASK_DIR -ne $taskDirectory -or $env:DEADLINE_CARL_SCRATCH_DIR -ne $scratchDirectory) { exit 5 }
+try { $allowedWrites = @($env:DEADLINE_CARL_ALLOWED_TASK_WRITES | ConvertFrom-Json) } catch { exit 6 }
+$expectedWrites = switch ($phase) {
+  'freeze' { @('deadline-report.md', 'spec.md') }
+  'build' { @('deadline-report.md', 'progress.json') }
+  'evidence' { @('deadline-report.md', 'evidence.md', 'evidence.json', 'raw/**') }
+  'verify' { @('deadline-report.md', 'verdict.json', 'problems.md') }
+  'fix' { @('deadline-report.md', 'progress.json', 'evidence.md', 'evidence.json', 'raw/**') }
+}
+if (($allowedWrites -join '|') -ne ($expectedWrites -join '|')) { exit 7 }
 "scratch $phase" | Set-Content -LiteralPath (Join-Path $scratchDirectory 'worker-output.txt') -Encoding utf8
 
 if ($phase -eq 'build' -and (Test-Path -LiteralPath $marker)) {
@@ -95,7 +111,7 @@ switch ($phase) {
 Create a proof file.
 
 ## Acceptance criteria
-### AC1 — product.txt exists and contains PASS
+### AC1 - product.txt exists and contains PASS
 
 ## Work items
 | Item | Description | Acceptance criteria |
@@ -116,6 +132,10 @@ Create a proof file.
 "@ | Set-Content -LiteralPath (Join-Path $taskDirectory 'spec.md') -Encoding utf8
   }
   'build' {
+    if (Test-Path -LiteralPath $createdBoundaryMarker) {
+      Remove-Item -LiteralPath $createdBoundaryMarker
+      '# Hallmark file plan that belongs in scratch' | Set-Content -LiteralPath (Join-Path $taskDirectory 'ui-build-plan.md') -Encoding utf8
+    }
     if ($stage -eq 'polish') { 'quality checked' | Set-Content -LiteralPath (Join-Path $root 'quality.txt') -Encoding utf8 }
     'PASS' | Set-Content -LiteralPath (Join-Path $root 'product.txt') -Encoding utf8
     $progressPath = Join-Path $taskDirectory 'progress.json'
@@ -251,6 +271,7 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
   if ($recoveredBudgetStatus.deadlineStage -ne 'focus') { throw 'Without estimates, added time must not imply craft readiness.' }
 
   New-Item -ItemType File -Path $delayMarker -Force | Out-Null
+  New-Item -ItemType File -Path $createdBoundaryMarker -Force | Out-Null
   New-Item -ItemType File -Path $writeBoundaryMarker -Force | Out-Null
   $startStatus = (& $LoopScript start -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
   $startedSupervisors.Add([int]$startStatus.supervisorPid)
@@ -297,6 +318,23 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
   if (-not (@($blockedStatus.lastWriteBoundaryViolations) -contains 'modified:raw/test-unit.txt')) {
     throw 'Status did not identify the verifier-modified formal evidence file.'
   }
+  $quarantinedIteration = @($blockedStatus.iterationHistory | Where-Object writeBoundaryStatus -eq 'quarantined')
+  if ($quarantinedIteration.Count -ne 1) { throw 'Created-only task file did not produce exactly one quarantined retry.' }
+  if (-not (@($quarantinedIteration[0].writeBoundaryViolations) -contains 'created:ui-build-plan.md')) {
+    throw 'Quarantined retry did not retain the original created-file violation.'
+  }
+  $automaticRecovery = @($blockedStatus.writeBoundaryRecoveryHistory | Where-Object mode -eq 'automatic')
+  if ($automaticRecovery.Count -ne 1 -or -not (Test-Path -LiteralPath $automaticRecovery[0].manifestPath)) {
+    throw 'Automatic quarantine did not publish a recovery manifest.'
+  }
+  if (Test-Path -LiteralPath (Join-Path $repo ".agent\tasks\$taskId\ui-build-plan.md")) {
+    throw 'Automatic quarantine left the extra file in the formal task directory.'
+  }
+  $automaticManifest = Get-Content -LiteralPath $automaticRecovery[0].manifestPath -Raw -Encoding utf8 | ConvertFrom-Json
+  if ($automaticManifest.items[0].relativePath -ne 'ui-build-plan.md' -or
+      -not (Test-Path -LiteralPath $automaticManifest.items[0].destinationPath)) {
+    throw 'Automatic quarantine manifest is incomplete or its recovered file is missing.'
+  }
 
   [System.IO.File]::WriteAllBytes($protectedRawPath, $protectedRawBefore)
   $resumedStatus = (& $LoopScript start -RepoRoot $repo -TaskId $taskId -Force) | ConvertFrom-Json
@@ -314,10 +352,9 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
     throw 'The fake verifier did not replace problems.md with a zero-problem PASS report.'
   }
   if ($problems -match '(?m)^###\s+') { throw 'The PASS problems report preserved a stale problem section.' }
-  if ([int]$finalState.iterationsStarted -ne 7) { throw "Expected 7 iterations including bounded polish, got $($finalState.iterationsStarted)." }
-  if (-not (Test-Path -LiteralPath (Join-Path $repo 'quality.txt'))) { throw 'Eligible polish was not actually executed.' }
-  if (@($finalState.iterationHistory | Where-Object strategy -eq 'polish').Count -ne 1) { throw 'Expected exactly one bounded polish iteration.' }
-  if (@($finalState.iterationHistory).Count -ne 7) { throw 'Iteration history lost an outcome across recovery.' }
+  if ([int]$finalState.iterationsStarted -ne 6) { throw "Expected 6 iterations including the quarantined retry, got $($finalState.iterationsStarted)." }
+  if (@($finalState.iterationHistory | Where-Object strategy -eq 'polish').Count -ne 0) { throw 'An untrusted quarantined forecast incorrectly unlocked polish.' }
+  if (@($finalState.iterationHistory).Count -ne 6) { throw 'Iteration history lost an outcome across recovery.' }
   if (@($finalState.strategyHistory | Where-Object { -not $_.endedAtUtc }).Count) { throw 'Stopped history has an unclosed interval.' }
   $historySeconds = ($finalState.strategyHistory | Measure-Object activeSeconds -Sum).Sum + $finalState.historyBaselineActiveSeconds
   if ([Math]::Abs($historySeconds - $finalState.accumulatedActiveSeconds) -gt 0.01) { throw 'Strategy durations do not reconcile with charged active time.' }
@@ -352,6 +389,11 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
     'Deadline stage: `focus`',
     'Remaining active time:',
     'Per-iteration scratch output:',
+    'Formal task write boundary - read before any auxiliary skill',
+    'Auxiliary skills and repository guidance never expand this formal-task allowlist',
+    'DEADLINE_CARL_FORMAL_TASK_DIR',
+    'DEADLINE_CARL_SCRATCH_DIR',
+    'DEADLINE_CARL_ALLOWED_TASK_WRITES',
     'DEADLINE_CARL_OUTPUT_DIR',
     'deadline-report.md',
     'Never silently downgrade required scope'
@@ -361,7 +403,20 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
     }
   }
 
-  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-007-verify.prompt.md") -Raw -Encoding utf8
+  $buildPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-002-build.prompt.md") -Raw -Encoding utf8
+  foreach ($requiredBuildPolicy in @(
+    '`progress.json`',
+    '`deadline-report.md`',
+    'record it in the allowed `progress.json` item''s `note` or `proof`',
+    'preferably under `auxiliary/<skill>/`',
+    '`tokens.css` or `.hallmark/*`'
+  )) {
+    if (-not $buildPrompt.Contains($requiredBuildPolicy)) {
+      throw "Build prompt is missing the auxiliary-skill path policy: $requiredBuildPolicy"
+    }
+  }
+
+  $verifyPrompt = Get-Content -LiteralPath (Join-Path $repo ".agent\durable-loop\$taskId\logs\iteration-006-verify.prompt.md") -Raw -Encoding utf8
   foreach ($requiredVerifierText in @(
     'replace both `verdict.json` and `problems.md` on every pass',
     'For PASS, write an explicit zero-problem report',
@@ -397,7 +452,7 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
   if ((Get-FileHash -LiteralPath $statePath).Hash -ne $beforeStatusHash) { throw 'Status read mutated persisted history.' }
 
   $fullHistory = (& $LoopScript history -RepoRoot $repo -TaskId $taskId) | ConvertFrom-Json
-  if (@($fullHistory.iterationHistory).Count -ne 7) { throw 'History command truncated full iterations.' }
+  if (@($fullHistory.iterationHistory).Count -ne 6) { throw 'History command truncated full iterations.' }
   if (@($completedStatus.iterationHistory).Count -gt 5 -or @($completedStatus.strategyHistory).Count -gt 10) { throw 'Status should bound history output.' }
 
   [pscustomobject]@{
@@ -421,6 +476,13 @@ if ($phase -eq 'build' -and $resultStatus -eq 'completed') {
   if (Test-Path -LiteralPath $supervisorLog) {
     Write-Output 'SUPERVISOR LOG:'
     Get-Content -LiteralPath $supervisorLog -Encoding utf8
+  }
+  foreach ($debugArtifact in @('spec.md', 'plan.json', 'progress.json')) {
+    $debugPath = Join-Path $repo ".agent\tasks\$taskId\$debugArtifact"
+    if (Test-Path -LiteralPath $debugPath) {
+      Write-Output "TASK ARTIFACT $debugArtifact`:"
+      Get-Content -LiteralPath $debugPath -Encoding utf8
+    }
   }
   $stderrLogs = @(Get-ChildItem -LiteralPath (Split-Path -Parent $supervisorLog) -Filter '*.stderr.log' -ErrorAction SilentlyContinue)
   foreach ($stderrLog in $stderrLogs) {

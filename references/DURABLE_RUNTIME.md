@@ -34,11 +34,11 @@ The supervisor exclusively owns `.agent/durable-loop/<TASK_ID>/config.json`, `ru
 
 Status joins runtime state with the frozen proof plan and reports separate implementation, fresh-verification, and acceptance bars. `iterationsStarted/maxIterations` remains an execution-capacity counter, not task completion.
 
-Status also includes `gitHygiene`, `scratchDirectory`, `currentScratchDirectory`, `lastWriteBoundaryStatus`, and `lastWriteBoundaryViolations`. Git hygiene detects missing local-state ignores, broad rules that hide `.agent/tasks/`, and runtime or scratch files already present in the Git index. It reports these conditions but never changes the index.
+Status also includes `gitHygiene`, `scratchDirectory`, `currentScratchDirectory`, `lastWriteBoundaryStatus`, `lastWriteBoundaryViolations`, `lastWriteBoundaryRecovery`, and bounded `writeBoundaryRecoveryHistory`. Git hygiene detects missing local-state ignores, broad rules that hide `.agent/tasks/`, and runtime or scratch files already present in the Git index. It reports these conditions but never changes the index.
 
 ## Scratch output and phase write sets
 
-Every iteration receives a unique `.agent/deadline-carl-scratch/<TASK_ID>/iteration-<NNN>-<PHASE>/` directory through its prompt and the `DEADLINE_CARL_OUTPUT_DIR` environment variable. Transient screenshots, traces, coverage, and test reports belong there. The evidence or fix phase explicitly promotes only selected current proof into `.agent/tasks/<TASK_ID>/raw/`.
+Every iteration receives a unique `.agent/deadline-carl-scratch/<TASK_ID>/iteration-<NNN>-<PHASE>/` directory through its prompt. `DEADLINE_CARL_SCRATCH_DIR` identifies it and `DEADLINE_CARL_OUTPUT_DIR` remains a compatibility alias. `DEADLINE_CARL_FORMAL_TASK_DIR` identifies the proof ledger, while `DEADLINE_CARL_ALLOWED_TASK_WRITES` is a JSON array for the current phase. Transient screenshots, traces, coverage, auxiliary plans, and test reports belong in scratch, preferably under `auxiliary/<skill>/`. The evidence or fix phase explicitly promotes only selected current proof into `.agent/tasks/<TASK_ID>/raw/`.
 
 The supervisor hashes the formal task bundle before starting each Worker and checks it afterward. Allowed task-artifact writes are:
 
@@ -49,7 +49,11 @@ The supervisor hashes the formal task bundle before starting each Worker and che
 - `fix`: `progress.json`, evidence files, and `raw/`
 - every phase: `deadline-report.md`
 
-Creating, modifying, or deleting another phase's task artifact immediately blocks the loop and records exact paths. The supervisor does not revert the files. The operator must inspect and repair the reported changes before an explicitly authorized `start -Force`.
+The complete policy, including product-output classification, automatic quarantine, and operator repair, is in [Write boundaries](WRITE_BOUNDARIES.md).
+
+If every violation is a newly created, disallowed file, the supervisor moves it into a unique per-iteration quarantine, writes an audit manifest, verifies the original task path is gone, counts the iteration as a failure, and retries the same phase. The recovered iteration is never accepted as phase completion and its forecast is not trusted. Repetition reaches `maxConsecutiveFailures` normally.
+
+Modified, deleted, unsafe, or mixed violations block immediately. The supervisor never reverts source-code changes or protected proof artifacts. A stopped older loop with an eligible created-only blocker can use `repair-boundary`; it clears the blocker but does not start the loop.
 
 ## Recovery behavior
 
@@ -93,7 +97,8 @@ Each worker must return a schema-constrained result with its phase, status, summ
 - Invalid/missing structured result: retry the same phase and increment consecutive failures.
 - Missing phase artifact: retry the same phase and increment consecutive failures.
 - Explicit worker blocker: stop and require operator resolution plus `start -Force`.
-- Cross-phase task-artifact write: block immediately with exact file diagnostics; never retry over silently contaminated evidence.
+- Created-only cross-phase task-artifact write: quarantine with a manifest, count a failure, and retry the same phase; block on repetition.
+- Modified, deleted, unsafe, or mixed task-artifact write: block immediately with exact file diagnostics and require manual review.
 - Repeated failures: stop after `maxConsecutiveFailures` and require inspection.
 - Codex CLI temporarily missing: keep heartbeat and retry resolution without consuming an iteration.
 - Safe stop: let the current child finish, checkpoint it, and do not start another child.
